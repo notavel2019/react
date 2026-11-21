@@ -1,0 +1,6 @@
+{
+  "name": "React Studio",
+  "description": "Estúdio de vídeos de reação em tela dividida com câmera inferior, enquadramento e controles do vídeo superior, detecção de voz para reações automáticas e mesa de áudio para microfone e fone de ouvido.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

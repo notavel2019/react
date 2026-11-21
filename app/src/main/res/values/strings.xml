@@ -1,0 +1,107 @@
+<resources>
+    <string name="app_name">React Studio</string>
+
+    <!-- Main Studio -->
+    <string name="studio_title">React Studio</string>
+    <string name="studio_pick_video">Escolher vídeo</string>
+    <string name="studio_change_video">Trocar vídeo</string>
+    <string name="studio_paste_url">Link / Reels</string>
+    <string name="studio_empty_title">Carregue o vídeo ou Reels para reagir</string>
+    <string name="studio_empty_subtitle">Escolha um vídeo da galeria ou cole um link do Instagram Reels / MP4 para enquadrar no topo enquanto grava sua reação embaixo.</string>
+    <string name="studio_framing_mode">Enquadrar</string>
+    <string name="studio_framing_done">Concluir</string>
+    <string name="studio_framing_hint">Pinça para zoom · Arraste para enquadrar</string>
+    <string name="studio_framing_reset">Resetar</string>
+    <string name="studio_audio_panel">Áudio</string>
+    <string name="studio_takes_panel">Takes</string>
+    <string name="studio_react_now">Reagir</string>
+    <string name="studio_reacting_badge">REAGINDO</string>
+    <string name="studio_speaking_detected">Voz detectada</string>
+    <string name="studio_recording_badge">GRAVANDO</string>
+    <string name="studio_camera_permission_title">Câmera e Microfone</string>
+    <string name="studio_camera_permission_desc">Permita acesso à câmera inferior e ao microfone para gravar suas reações e detectar quando você está falando.</string>
+    <string name="studio_grant_permissions">Permitir câmera e áudio</string>
+    <string name="studio_mic_permission_needed">Microfone necessário para detecção de voz e áudio</string>
+
+    <!-- Playback Controls -->
+    <string name="cd_play">Reproduzir vídeo</string>
+    <string name="cd_pause">Pausar vídeo</string>
+    <string name="cd_rewind">Retroceder 5 segundos</string>
+    <string name="cd_forward">Adiantar 5 segundos</string>
+    <string name="cd_toggle_mute">Silenciar ou ativar som do vídeo</string>
+    <string name="cd_flip_camera">Alternar câmera frontal e traseira</string>
+    <string name="cd_mirror_camera">Espelhar câmera</string>
+    <string name="cd_record_start">Iniciar gravação da reação</string>
+    <string name="cd_record_stop">Parar gravação</string>
+    <string name="cd_mark_reaction">Marcar momento de reação</string>
+    <string name="cd_audio_settings">Abrir painel de áudio e fone</string>
+    <string name="cd_framing_settings">Ajustar enquadramento do vídeo</string>
+    <string name="cd_split_ratio">Alterar divisão da tela</string>
+    <string name="cd_app_updates">Verificar atualizações do aplicativo</string>
+    <string name="cd_close">Fechar</string>
+
+    <!-- Audio Panel -->
+    <string name="audio_panel_title">Mesa de Áudio</string>
+    <string name="audio_panel_subtitle">Microfone, fone de ouvido e reação por voz</string>
+    <string name="audio_tab_mic">Microfone</string>
+    <string name="audio_tab_headphones">Fone &amp; Mix</string>
+    <string name="audio_tab_react">Auto-React</string>
+    <string name="audio_input_device">Dispositivo de entrada</string>
+    <string name="audio_output_device">Saída de áudio</string>
+    <string name="audio_headphones_connected">Fone conectado</string>
+    <string name="audio_speaker_warning">Alto-falante ativo · Use fone para evitar eco</string>
+    <string name="audio_mic_gain">Ganho do microfone</string>
+    <string name="audio_noise_suppression">Supressão de ruído</string>
+    <string name="audio_noise_suppression_desc">Reduz chiados e barulho ambiente na voz</string>
+    <string name="audio_echo_cancel">Cancelamento de eco</string>
+    <string name="audio_echo_cancel_desc">Evita vazamento do vídeo superior no microfone</string>
+    <string name="audio_agc">Nivelador automático (AGC)</string>
+    <string name="audio_agc_desc">Mantém o volume da voz estável ao falar alto ou baixo</string>
+    <string name="audio_monitoring_title">Retorno no fone (Monitor)</string>
+    <string name="audio_monitoring_desc">Ouça sua própria voz em tempo real no fone</string>
+    <string name="audio_monitoring_locked">Conecte um fone de ouvido para ativar o retorno sem microfonia</string>
+    <string name="audio_monitor_volume">Volume do retorno</string>
+    <string name="audio_video_volume">Volume do vídeo no fone</string>
+    <string name="audio_mix_balance">Balanço Vídeo / Voz</string>
+    <string name="audio_eq_profile">Perfil acústico do fone</string>
+    <string name="audio_auto_react_title">Reação automática ao falar</string>
+    <string name="audio_auto_react_desc">Detecta quando você ou alguém na câmera fala e aciona o modo reação</string>
+    <string name="audio_threshold_label">Sensibilidade de voz (Limiar)</string>
+    <string name="audio_react_mode_label">Ação ao detectar voz</string>
+    <string name="audio_duck_level">Volume do vídeo durante fala</string>
+    <string name="audio_resume_delay">Retomar vídeo após silêncio</string>
+
+    <!-- Framing & URL / Instagram Dialog -->
+    <string name="url_dialog_title">Instagram Reels ou Link MP4</string>
+    <string name="url_dialog_subtitle">Cole o link de um Reel/post do Instagram ou um link direto de vídeo (.mp4 / .m3u8) para enquadrar no palco superior.</string>
+    <string name="url_dialog_hint">https://www.instagram.com/reel/...</string>
+    <string name="url_dialog_paste">Colar link</string>
+    <string name="url_dialog_load">Carregar no palco</string>
+    <string name="url_dialog_cancel">Cancelar</string>
+
+    <!-- Export & Share Sheet -->
+    <string name="export_title">Salvar e Compartilhar Reação</string>
+    <string name="export_subtitle">Combine o vídeo principal com sua reação em tela dividida ou compartilhe agora.</string>
+    <string name="export_combine_cta">Combinar Vídeo + Reação (Tela Dividida)</string>
+    <string name="export_combining">Renderizando vídeo combinado...</string>
+    <string name="export_combined_ready">Vídeo combinado salvo na Galeria!</string>
+    <string name="export_share_social">Compartilhar nas redes sociais</string>
+    <string name="export_direct_link_title">Compartilhar por link direto</string>
+    <string name="export_copy_link">Copiar link</string>
+    <string name="export_cloud_link">Gerar link na nuvem (Drive / Fotos)</string>
+
+    <!-- GitHub Updates Sheet -->
+    <string name="updates_title">Atualizações via GitHub</string>
+    <string name="updates_subtitle">Conecte seu repositório GitHub com Actions para verificar e baixar novas versões direto do app.</string>
+    <string name="updates_repo_label">Repositório GitHub (usuario/repositorio)</string>
+    <string name="updates_check_button">Verificar atualização</string>
+    <string name="updates_download_button">Baixar nova versão no GitHub</string>
+
+    <!-- Takes Sheet -->
+    <string name="takes_title">Gravações e Reações</string>
+    <string name="takes_empty_title">Nenhum take gravado ainda</string>
+    <string name="takes_empty_subtitle">Pressione o botão vermelho de gravar no estúdio para capturar sua reação em vídeo na galeria.</string>
+    <string name="takes_markers_label">Momentos de reação marcados</string>
+    <string name="takes_share">Compartilhar</string>
+    <string name="takes_open">Assistir</string>
+</resources>
