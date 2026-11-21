@@ -14,6 +14,7 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -345,7 +346,9 @@ private fun ActiveVideoViewport(
     val isInstagramEmbed = uiState.sourceVideoType == VideoSourceType.INSTAGRAM_EMBED
 
     BoxWithConstraints(
-        modifier = Modifier.fillMaxSize(),
+        modifier = Modifier
+            .fillMaxSize()
+            .clipToBounds(),
         contentAlignment = Alignment.Center
     ) {
         val containerW = constraints.maxWidth.toFloat().coerceAtLeast(1f)
@@ -358,153 +361,163 @@ private fun ActiveVideoViewport(
         }
         val containerAspect = containerW / containerH
 
-        val (targetW, targetH) = when (framing.aspectPreset) {
-            VideoAspectPreset.FILL -> {
-                if (naturalAspect > containerAspect) {
-                    val h = containerH
-                    val w = h * naturalAspect
-                    w to h
-                } else {
-                    val w = containerW
-                    val h = w / naturalAspect
-                    w to h
-                }
+        // ALWAYS preserve the video's true natural aspect ratio (ZERO horizontal or vertical stretching!)
+        val (videoBaseW, videoBaseH) = if (framing.aspectPreset == VideoAspectPreset.FIT) {
+            if (naturalAspect > containerAspect) {
+                containerW to (containerW / naturalAspect)
+            } else {
+                (containerH * naturalAspect) to containerH
             }
-            VideoAspectPreset.FIT -> {
-                if (naturalAspect > containerAspect) {
-                    val w = containerW
-                    val h = w / naturalAspect
-                    w to h
-                } else {
-                    val h = containerH
-                    val w = h * naturalAspect
-                    w to h
-                }
+        } else {
+            // FILL entire top quadrant edge-to-edge proportionally; user pinches & drags freely
+            if (naturalAspect > containerAspect) {
+                (containerH * naturalAspect) to containerH
+            } else {
+                containerW to (containerW / naturalAspect)
             }
-            VideoAspectPreset.RATIO_9_16 -> fitBox(containerW, containerH, 9f / 16f)
-            VideoAspectPreset.RATIO_16_9 -> fitBox(containerW, containerH, 16f / 9f)
-            VideoAspectPreset.RATIO_1_1 -> fitBox(containerW, containerH, 1f)
-            VideoAspectPreset.RATIO_4_3 -> fitBox(containerW, containerH, 4f / 3f)
         }
 
         val density = LocalDensity.current
-        val widthDp = with(density) { targetW.toDp() }
-        val heightDp = with(density) { targetH.toDp() }
+        val videoWidthDp = with(density) { videoBaseW.toDp() }
+        val videoHeightDp = with(density) { videoBaseH.toDp() }
+        val txPx = framing.offsetXFraction * containerW
+        val tyPx = framing.offsetYFraction * containerH
 
-        Box(
-            modifier = Modifier
-                .size(widthDp, heightDp)
-                .clipToBounds()
-                .then(
-                    if (framing.aspectPreset != VideoAspectPreset.FILL && framing.aspectPreset != VideoAspectPreset.FIT) {
-                        Modifier.border(1.dp, ElectricCyan.copy(alpha = 0.45f), RoundedCornerShape(8.dp))
-                    } else {
-                        Modifier
-                    }
-                )
-        ) {
-            if (isInstagramEmbed) {
-                val embedUrl = uiState.sourceVideoUri.orEmpty()
-                AndroidView(
-                    factory = { ctx ->
-                        WebView(ctx).apply {
-                            setBackgroundColor(android.graphics.Color.BLACK)
-                            settings.javaScriptEnabled = true
-                            settings.domStorageEnabled = true
-                            settings.mediaPlaybackRequiresUserGesture = false
-                            settings.allowFileAccess = false
-                            settings.allowContentAccess = false
-                            settings.mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
-                            settings.useWideViewPort = true
-                            settings.loadWithOverviewMode = true
-                            webViewClient = object : WebViewClient() {
-                                override fun shouldOverrideUrlLoading(
-                                    view: WebView?,
-                                    request: WebResourceRequest?
-                                ): Boolean {
-                                    val url = request?.url?.toString() ?: return true
-                                    return !InstagramLinkResolver.isAllowedInstagramEmbedUrl(url)
-                                }
-                            }
-                            if (InstagramLinkResolver.isAllowedInstagramEmbedUrl(embedUrl)) {
-                                loadUrl(embedUrl)
+        if (isInstagramEmbed) {
+            val embedUrl = uiState.sourceVideoUri.orEmpty()
+            AndroidView(
+                factory = { ctx ->
+                    WebView(ctx).apply {
+                        setBackgroundColor(android.graphics.Color.BLACK)
+                        settings.javaScriptEnabled = true
+                        settings.domStorageEnabled = true
+                        settings.mediaPlaybackRequiresUserGesture = false
+                        settings.allowFileAccess = false
+                        settings.allowContentAccess = false
+                        settings.mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
+                        settings.useWideViewPort = true
+                        settings.loadWithOverviewMode = true
+                        webViewClient = object : WebViewClient() {
+                            override fun shouldOverrideUrlLoading(
+                                view: WebView?,
+                                request: WebResourceRequest?
+                            ): Boolean {
+                                val url = request?.url?.toString() ?: return true
+                                return !InstagramLinkResolver.isAllowedInstagramEmbedUrl(url)
                             }
                         }
-                    },
-                    update = { webView ->
-                        if (webView.url != embedUrl && InstagramLinkResolver.isAllowedInstagramEmbedUrl(embedUrl)) {
-                            webView.loadUrl(embedUrl)
+                        if (InstagramLinkResolver.isAllowedInstagramEmbedUrl(embedUrl)) {
+                            loadUrl(embedUrl)
                         }
-                    },
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .graphicsLayer {
-                            scaleX = framing.scale
-                            scaleY = framing.scale
-                            translationX = framing.offsetX
-                            translationY = framing.offsetY
-                        }
-                )
-            } else {
-                var textureViewRef by remember { mutableStateOf<TextureView?>(null) }
-
-                DisposableEffect(exoPlayer) {
-                    onDispose {
-                        textureViewRef?.let { exoPlayer.clearVideoTextureView(it) }
                     }
+                },
+                update = { webView ->
+                    if (webView.url != embedUrl && InstagramLinkResolver.isAllowedInstagramEmbedUrl(embedUrl)) {
+                        webView.loadUrl(embedUrl)
+                    }
+                },
+                modifier = Modifier
+                    .size(videoWidthDp, videoHeightDp)
+                    .graphicsLayer {
+                        scaleX = framing.scale
+                        scaleY = framing.scale
+                        translationX = txPx
+                        translationY = tyPx
+                    }
+            )
+        } else {
+            var textureViewRef by remember { mutableStateOf<TextureView?>(null) }
+
+            DisposableEffect(exoPlayer) {
+                onDispose {
+                    textureViewRef?.let { exoPlayer.clearVideoTextureView(it) }
                 }
+            }
 
-                AndroidView(
-                    factory = { ctx ->
-                        TextureView(ctx).also { tv ->
-                            textureViewRef = tv
-                            exoPlayer.setVideoTextureView(tv)
-                        }
-                    },
-                    update = { tv ->
+            AndroidView(
+                factory = { ctx ->
+                    TextureView(ctx).also { tv ->
                         textureViewRef = tv
                         exoPlayer.setVideoTextureView(tv)
-                    },
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .clickable(enabled = !uiState.isFramingMode, onClick = onTapVideo)
-                        .graphicsLayer {
-                            scaleX = framing.scale
-                            scaleY = framing.scale
-                            translationX = framing.offsetX
-                            translationY = framing.offsetY
-                        }
-                )
-            }
+                    }
+                },
+                update = { tv ->
+                    textureViewRef = tv
+                    exoPlayer.setVideoTextureView(tv)
+                },
+                modifier = Modifier
+                    .size(videoWidthDp, videoHeightDp)
+                    .graphicsLayer {
+                        scaleX = framing.scale
+                        scaleY = framing.scale
+                        translationX = txPx
+                        translationY = tyPx
+                    }
+            )
         }
 
-        // Gesture Interceptor + Rule of Thirds Grid while in Framing Mode (works for BOTH MP4 & Instagram Reels!)
-        if (uiState.isFramingMode) {
+        // Direct pinch-zoom & pan layer:
+        // - Always active for ExoPlayer videos (single tap = play/pause, pinch/drag = frame!)
+        // - Active during Framing Mode for Instagram Embeds (so normal taps still control the Reel player)
+        if (!isInstagramEmbed || uiState.isFramingMode) {
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .pointerInput(Unit) {
+                    .pointerInput(containerW, containerH) {
                         detectTransformGestures { _, pan, zoom, _ ->
-                            onFramingGesture(zoom, pan.x, pan.y)
+                            onFramingGesture(
+                                zoom,
+                                pan.x / containerW,
+                                pan.y / containerH
+                            )
                         }
                     }
-            ) {
-                if (framing.showRuleOfThirds) {
-                    Canvas(modifier = Modifier.fillMaxSize()) {
-                        val stroke = 1.dp.toPx()
-                        val lineColor = ElectricCyan.copy(alpha = 0.45f)
-                        val thirdW = size.width / 3f
-                        val thirdH = size.height / 3f
-                        drawLine(lineColor, Offset(thirdW, 0f), Offset(thirdW, size.height), stroke)
-                        drawLine(lineColor, Offset(thirdW * 2f, 0f), Offset(thirdW * 2f, size.height), stroke)
-                        drawLine(lineColor, Offset(0f, thirdH), Offset(size.width, thirdH), stroke)
-                        drawLine(lineColor, Offset(0f, thirdH * 2f), Offset(size.width, thirdH * 2f), stroke)
-                        val cx = size.width / 2f
-                        val cy = size.height / 2f
-                        val arm = 12.dp.toPx()
-                        drawLine(CoralCrimson.copy(alpha = 0.8f), Offset(cx - arm, cy), Offset(cx + arm, cy), 1.5.dp.toPx())
-                        drawLine(CoralCrimson.copy(alpha = 0.8f), Offset(cx, cy - arm), Offset(cx, cy + arm), 1.5.dp.toPx())
-                    }
+                    .then(
+                        if (!uiState.isFramingMode && !isInstagramEmbed) {
+                            Modifier.pointerInput(Unit) {
+                                detectTapGestures(onTap = { onTapVideo() })
+                            }
+                        } else {
+                            Modifier
+                        }
+                    )
+            )
+        }
+
+        // Optional Aspect Framing Guide & Rule of Thirds Grid in Framing Mode
+        if (uiState.isFramingMode) {
+            val guideAspect = when (framing.aspectPreset) {
+                VideoAspectPreset.RATIO_1_1 -> 1f
+                VideoAspectPreset.RATIO_9_16 -> 9f / 16f
+                VideoAspectPreset.RATIO_16_9 -> 16f / 9f
+                VideoAspectPreset.RATIO_4_3 -> 4f / 3f
+                else -> null
+            }
+
+            if (guideAspect != null) {
+                val (gW, gH) = fitBox(containerW, containerH, guideAspect)
+                Box(
+                    modifier = Modifier
+                        .size(with(density) { gW.toDp() }, with(density) { gH.toDp() })
+                        .border(1.5.dp, ElectricCyan.copy(alpha = 0.7f), RoundedCornerShape(6.dp))
+                )
+            }
+
+            if (framing.showRuleOfThirds) {
+                Canvas(modifier = Modifier.fillMaxSize()) {
+                    val stroke = 1.dp.toPx()
+                    val lineColor = ElectricCyan.copy(alpha = 0.45f)
+                    val thirdW = size.width / 3f
+                    val thirdH = size.height / 3f
+                    drawLine(lineColor, Offset(thirdW, 0f), Offset(thirdW, size.height), stroke)
+                    drawLine(lineColor, Offset(thirdW * 2f, 0f), Offset(thirdW * 2f, size.height), stroke)
+                    drawLine(lineColor, Offset(0f, thirdH), Offset(size.width, thirdH), stroke)
+                    drawLine(lineColor, Offset(0f, thirdH * 2f), Offset(size.width, thirdH * 2f), stroke)
+                    val cx = size.width / 2f
+                    val cy = size.height / 2f
+                    val arm = 12.dp.toPx()
+                    drawLine(CoralCrimson.copy(alpha = 0.8f), Offset(cx - arm, cy), Offset(cx + arm, cy), 1.5.dp.toPx())
+                    drawLine(CoralCrimson.copy(alpha = 0.8f), Offset(cx, cy - arm), Offset(cx, cy + arm), 1.5.dp.toPx())
                 }
             }
         }
@@ -673,7 +686,7 @@ private fun FramingControlsOverlay(
             Slider(
                 value = uiState.framing.scale,
                 onValueChange = onScaleChange,
-                valueRange = 1f..3.5f,
+                valueRange = 0.5f..4.0f,
                 colors = SliderDefaults.colors(
                     thumbColor = ElectricCyan,
                     activeTrackColor = ElectricCyan,

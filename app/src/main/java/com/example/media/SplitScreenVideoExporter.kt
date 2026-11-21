@@ -2,6 +2,7 @@ package com.example.media
 
 import android.content.ContentValues
 import android.content.Context
+import android.graphics.Matrix
 import android.net.Uri
 import android.os.Build
 import android.os.Handler
@@ -11,8 +12,8 @@ import androidx.annotation.OptIn
 import androidx.media3.common.MediaItem
 import androidx.media3.common.util.Size
 import androidx.media3.common.util.UnstableApi
+import androidx.media3.effect.MatrixTransformation
 import androidx.media3.effect.OverlaySettings
-import androidx.media3.effect.Presentation
 import androidx.media3.effect.VideoCompositorSettings
 import androidx.media3.transformer.Composition
 import androidx.media3.transformer.EditedMediaItem
@@ -23,6 +24,8 @@ import androidx.media3.transformer.ExportResult
 import androidx.media3.transformer.ProgressHolder
 import androidx.media3.transformer.Transformer
 import com.example.model.SplitRatioPreset
+import com.example.model.VideoAspectPreset
+import com.example.model.VideoFramingState
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
@@ -37,6 +40,64 @@ data class CombinedExportOutput(
     val displayName: String
 )
 
+/**
+ * Maps an input video into a fixed target quadrant (outWidth x outHeight) with ZERO stretching,
+ * applying the exact pinch-zoom and pan offsets the user adjusted in the live preview.
+ */
+@OptIn(UnstableApi::class)
+private class UndistortedQuadrantTransformation(
+    private val outWidth: Int,
+    private val outHeight: Int,
+    private val fitInside: Boolean,
+    private val userScale: Float,
+    private val offsetXFraction: Float,
+    private val offsetYFraction: Float,
+    private val mirrorHorizontal: Boolean = false
+) : MatrixTransformation {
+
+    private var cachedMatrix = Matrix()
+
+    override fun configure(inputWidth: Int, inputHeight: Int): Size {
+        val inW = inputWidth.coerceAtLeast(1).toFloat()
+        val inH = inputHeight.coerceAtLeast(1).toFloat()
+        val inAspect = inW / inH
+        val outAspect = outWidth.toFloat() / outHeight.toFloat()
+
+        // Preserve exact pixel aspect ratio (never stretch horizontally or vertically)
+        val (baseSx, baseSy) = if (fitInside) {
+            if (inAspect > outAspect) {
+                1f to (outAspect / inAspect)
+            } else {
+                (inAspect / outAspect) to 1f
+            }
+        } else {
+            // Fill entire quadrant cleanly, cropping excess proportionally
+            if (inAspect > outAspect) {
+                (inAspect / outAspect) to 1f
+            } else {
+                1f to (outAspect / inAspect)
+            }
+        }
+
+        val scale = userScale.coerceIn(0.5f, 4.0f)
+        val sx = baseSx * scale * (if (mirrorHorizontal) -1f else 1f)
+        val sy = baseSy * scale
+
+        // OpenGL NDC spans [-1, +1] (2 units wide/tall); +Y is UP in OpenGL vs DOWN in Compose
+        val tx = (offsetXFraction * 2f).coerceIn(-3f, 3f)
+        val ty = (-offsetYFraction * 2f).coerceIn(-3f, 3f)
+
+        cachedMatrix = Matrix().apply {
+            postScale(sx, sy)
+            postTranslate(tx, ty)
+        }
+
+        return Size(outWidth, outHeight)
+    }
+
+    override fun getMatrix(presentationTimeUs: Long): Matrix = cachedMatrix
+}
+
 @OptIn(UnstableApi::class)
 class SplitScreenVideoExporter(private val context: Context) {
 
@@ -44,8 +105,11 @@ class SplitScreenVideoExporter(private val context: Context) {
         sourceVideoUri: String,
         reactionVideoUri: String,
         sourceStartMs: Long,
+        sourceDurationMs: Long,
         reactionDurationMs: Long,
         splitRatio: SplitRatioPreset,
+        framing: VideoFramingState,
+        mirrorBottomCamera: Boolean,
         onProgress: (Float) -> Unit
     ): Result<CombinedExportOutput> {
         val outputFile = File(
@@ -57,8 +121,11 @@ class SplitScreenVideoExporter(private val context: Context) {
             sourceVideoUri = sourceVideoUri,
             reactionVideoUri = reactionVideoUri,
             sourceStartMs = sourceStartMs.coerceAtLeast(0L),
+            sourceDurationMs = sourceDurationMs,
             reactionDurationMs = reactionDurationMs.coerceAtLeast(1500L),
             splitRatio = splitRatio,
+            framing = framing,
+            mirrorBottomCamera = mirrorBottomCamera,
             outputPath = outputFile.absolutePath,
             onProgress = onProgress
         )
@@ -86,8 +153,11 @@ class SplitScreenVideoExporter(private val context: Context) {
         sourceVideoUri: String,
         reactionVideoUri: String,
         sourceStartMs: Long,
+        sourceDurationMs: Long,
         reactionDurationMs: Long,
         splitRatio: SplitRatioPreset,
+        framing: VideoFramingState,
+        mirrorBottomCamera: Boolean,
         outputPath: String,
         onProgress: (Float) -> Unit
     ): Result<Unit> = withContext(Dispatchers.Main) {
@@ -96,54 +166,63 @@ class SplitScreenVideoExporter(private val context: Context) {
             val outWidth = 720
             val outHeight = 1280
             val topWeight = splitRatio.topWeight.coerceIn(0.35f, 0.65f)
-            val bottomWeight = 1f - topWeight
 
             val topHeight = ((outHeight * topWeight).toInt() / 2) * 2
             val bottomHeight = outHeight - topHeight
 
-            // Clip top source video to match the recorded reaction segment
+            // Safely clamp clipping range to source video duration if known
+            val desiredEndMs = sourceStartMs + reactionDurationMs
+            val safeEndMs = if (sourceDurationMs > 0L) {
+                desiredEndMs.coerceAtMost(sourceDurationMs)
+            } else {
+                desiredEndMs
+            }
+            val safeStartMs = sourceStartMs.coerceIn(0L, (safeEndMs - 500L).coerceAtLeast(0L))
+
             val clippedTopItem = MediaItem.Builder()
                 .setUri(sourceVideoUri)
                 .setClippingConfiguration(
                     MediaItem.ClippingConfiguration.Builder()
-                        .setStartPositionMs(sourceStartMs)
-                        .setEndPositionMs(sourceStartMs + reactionDurationMs)
+                        .setStartPositionMs(safeStartMs)
+                        .setEndPositionMs(safeEndMs)
                         .build()
                 )
                 .build()
 
             val reactionItem = MediaItem.fromUri(reactionVideoUri)
 
+            val topTransformation = UndistortedQuadrantTransformation(
+                outWidth = outWidth,
+                outHeight = topHeight,
+                fitInside = framing.aspectPreset == VideoAspectPreset.FIT,
+                userScale = framing.scale,
+                offsetXFraction = framing.offsetXFraction,
+                offsetYFraction = framing.offsetYFraction,
+                mirrorHorizontal = false
+            )
+
+            val bottomTransformation = UndistortedQuadrantTransformation(
+                outWidth = outWidth,
+                outHeight = bottomHeight,
+                fitInside = false,
+                userScale = 1f,
+                offsetXFraction = 0f,
+                offsetYFraction = 0f,
+                mirrorHorizontal = mirrorBottomCamera
+            )
+
             val topEdited = EditedMediaItem.Builder(clippedTopItem)
-                .setEffects(
-                    Effects(
-                        emptyList(),
-                        listOf(
-                            Presentation.createForWidthAndHeight(
-                                outWidth,
-                                topHeight,
-                                Presentation.LAYOUT_SCALE_TO_FIT_WITH_CROP
-                            )
-                        )
-                    )
-                )
+                .setEffects(Effects(emptyList(), listOf(topTransformation)))
                 .build()
 
             val bottomEdited = EditedMediaItem.Builder(reactionItem)
-                .setEffects(
-                    Effects(
-                        emptyList(),
-                        listOf(
-                            Presentation.createForWidthAndHeight(
-                                outWidth,
-                                bottomHeight,
-                                Presentation.LAYOUT_SCALE_TO_FIT_WITH_CROP
-                            )
-                        )
-                    )
-                )
+                .setEffects(Effects(emptyList(), listOf(bottomTransformation)))
                 .build()
 
+            // IMPORTANT: Each input is ALREADY rendered at its exact quadrant pixel height
+            // (topHeight + bottomHeight == outHeight). Keeping OverlaySettings scale at (1f, 1f)
+            // places top [0..topHeight] and bottom [topHeight..outHeight] seamlessly with zero
+            // black gap and zero vertical squashing!
             val compositorSettings = object : VideoCompositorSettings {
                 override fun getOutputSize(inputSizes: MutableList<Size>): Size {
                     return Size(outWidth, outHeight)
@@ -154,17 +233,15 @@ class SplitScreenVideoExporter(private val context: Context) {
                     presentationTimeUs: Long
                 ): OverlaySettings {
                     return when (inputId) {
-                        // Top source video anchored to top edge (NDC y = +1.0)
                         0 -> OverlaySettings.Builder()
                             .setOverlayFrameAnchor(0f, 1f)
                             .setBackgroundFrameAnchor(0f, 1f)
-                            .setScale(1f, topWeight)
+                            .setScale(1f, 1f)
                             .build()
-                        // Bottom reaction camera anchored to bottom edge (NDC y = -1.0)
                         else -> OverlaySettings.Builder()
                             .setOverlayFrameAnchor(0f, -1f)
                             .setBackgroundFrameAnchor(0f, -1f)
-                            .setScale(1f, bottomWeight)
+                            .setScale(1f, 1f)
                             .build()
                     }
                 }

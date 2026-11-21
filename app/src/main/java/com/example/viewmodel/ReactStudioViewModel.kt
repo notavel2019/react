@@ -211,9 +211,9 @@ class ReactStudioViewModel(application: Application) : AndroidViewModel(applicat
                 isManualReacting = false,
                 framing = it.framing.copy(
                     scale = 1f,
-                    offsetX = 0f,
-                    offsetY = 0f,
-                    aspectPreset = VideoAspectPreset.FIT
+                    offsetXFraction = 0f,
+                    offsetYFraction = 0f,
+                    aspectPreset = VideoAspectPreset.FILL
                 )
             )
         }
@@ -245,9 +245,9 @@ class ReactStudioViewModel(application: Application) : AndroidViewModel(applicat
                             isManualReacting = false,
                             framing = it.framing.copy(
                                 scale = 1f,
-                                offsetX = 0f,
-                                offsetY = 0f,
-                                aspectPreset = defaultPreset
+                                offsetXFraction = 0f,
+                                offsetYFraction = 0f,
+                                aspectPreset = VideoAspectPreset.FILL
                             ),
                             statusToast = if (resolved.sourceType == VideoSourceType.INSTAGRAM_EMBED) {
                                 "Reel carregado · Use 'Enquadrar' para ajustar no palco superior"
@@ -329,17 +329,17 @@ class ReactStudioViewModel(application: Application) : AndroidViewModel(applicat
         _uiState.update { it.copy(isFramingMode = enabled) }
     }
 
-    fun updateFramingTransform(zoomFactor: Float, panX: Float, panY: Float) {
+    fun updateFramingTransform(zoomFactor: Float, panXFraction: Float, panYFraction: Float) {
         _uiState.update { state ->
-            val newScale = (state.framing.scale * zoomFactor).coerceIn(1f, 3.5f)
-            val maxOffset = (newScale - 1f) * 320f + 140f
-            val newX = (state.framing.offsetX + panX).coerceIn(-maxOffset, maxOffset)
-            val newY = (state.framing.offsetY + panY).coerceIn(-maxOffset, maxOffset)
+            val newScale = (state.framing.scale * zoomFactor).coerceIn(0.5f, 4.0f)
+            val maxOffset = (newScale * 0.75f).coerceAtLeast(0.65f)
+            val newX = (state.framing.offsetXFraction + panXFraction).coerceIn(-maxOffset, maxOffset)
+            val newY = (state.framing.offsetYFraction + panYFraction).coerceIn(-maxOffset, maxOffset)
             state.copy(
                 framing = state.framing.copy(
                     scale = newScale,
-                    offsetX = newX,
-                    offsetY = newY
+                    offsetXFraction = newX,
+                    offsetYFraction = newY
                 )
             )
         }
@@ -347,7 +347,7 @@ class ReactStudioViewModel(application: Application) : AndroidViewModel(applicat
 
     fun setFramingScale(scale: Float) {
         _uiState.update { state ->
-            val clamped = scale.coerceIn(1f, 3.5f)
+            val clamped = scale.coerceIn(0.5f, 4.0f)
             state.copy(framing = state.framing.copy(scale = clamped))
         }
     }
@@ -358,8 +358,8 @@ class ReactStudioViewModel(application: Application) : AndroidViewModel(applicat
                 framing = state.framing.copy(
                     aspectPreset = preset,
                     scale = 1f,
-                    offsetX = 0f,
-                    offsetY = 0f
+                    offsetXFraction = 0f,
+                    offsetYFraction = 0f
                 )
             )
         }
@@ -376,13 +376,9 @@ class ReactStudioViewModel(application: Application) : AndroidViewModel(applicat
             state.copy(
                 framing = state.framing.copy(
                     scale = 1f,
-                    offsetX = 0f,
-                    offsetY = 0f,
-                    aspectPreset = if (state.sourceVideoType == VideoSourceType.INSTAGRAM_EMBED) {
-                        VideoAspectPreset.RATIO_9_16
-                    } else {
-                        VideoAspectPreset.FIT
-                    }
+                    offsetXFraction = 0f,
+                    offsetYFraction = 0f,
+                    aspectPreset = VideoAspectPreset.FILL
                 )
             )
         }
@@ -543,8 +539,11 @@ class ReactStudioViewModel(application: Application) : AndroidViewModel(applicat
                 sourceVideoUri = sourceUri,
                 reactionVideoUri = take.uriString,
                 sourceStartMs = state.recordingSourceStartMs,
+                sourceDurationMs = state.durationMs,
                 reactionDurationMs = take.durationMs.coerceAtLeast(2_000L),
                 splitRatio = state.splitRatio,
+                framing = state.framing,
+                mirrorBottomCamera = state.isFrontCamera && state.isCameraMirrored,
                 onProgress = { progress ->
                     _uiState.update { it.copy(exportStatus = ExportStatus.Combining(progress)) }
                 }

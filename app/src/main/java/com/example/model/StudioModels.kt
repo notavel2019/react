@@ -93,9 +93,9 @@ sealed class AppUpdateStatus {
 
 data class VideoFramingState(
     val scale: Float = 1f,
-    val offsetX: Float = 0f,
-    val offsetY: Float = 0f,
-    val aspectPreset: VideoAspectPreset = VideoAspectPreset.FIT,
+    val offsetXFraction: Float = 0f,
+    val offsetYFraction: Float = 0f,
+    val aspectPreset: VideoAspectPreset = VideoAspectPreset.FILL,
     val showRuleOfThirds: Boolean = true
 )
 
