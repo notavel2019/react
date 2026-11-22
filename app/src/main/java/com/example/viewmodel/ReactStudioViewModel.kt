@@ -2,6 +2,7 @@ package com.example.viewmodel
 
 import android.app.Application
 import android.content.ContentUris
+import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.provider.MediaStore
 import android.provider.OpenableColumns
@@ -21,10 +22,13 @@ import com.example.model.ExportStatus
 import com.example.model.HeadphoneEqProfile
 import com.example.model.ReactionMarker
 import com.example.model.RecordedTake
+import com.example.model.SourcePlaybackSegment
 import com.example.model.SplitRatioPreset
 import com.example.model.StudioUiState
 import com.example.model.VideoAspectPreset
 import com.example.model.VideoSourceType
+import kotlin.math.abs
+import kotlin.math.log10
 import com.example.update.GitHubUpdateRepository
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -72,6 +76,18 @@ class ReactStudioViewModel(application: Application) : AndroidViewModel(applicat
     private var lastAutoMarkerAtMs = 0L
     private var wasPlayingBeforeAutoPause = false
     private var lastSpeakingState = false
+
+    // Exact hardware-clocked top-video timeline recorded during active camera capture
+    private val recordedSegments = mutableListOf<SourcePlaybackSegment>()
+    private var activeSegRecStartMs = 0L
+    private var activeSegSourceStartMs = 0L
+    private var activeSegLastSourceMs = 0L
+    private var activeSegLastRecMs = 0L
+    private var activeSegIsPaused = false
+    private var recordingSmoothedDb = -60f
+    private var recordingSpeechStartAtMs = 0L
+    private var recordingLastSpeechAtMs = 0L
+    private var recordingSpeakingState = false
 
     init {
         loadInitialPreferences()
@@ -217,6 +233,18 @@ class ReactStudioViewModel(application: Application) : AndroidViewModel(applicat
                 )
             )
         }
+        // Immediately probe true display dimensions (including rotation) so frame 0 is never distorted
+        viewModelScope.launch(Dispatchers.IO) {
+            probeVideoDimensions(uri)?.let { (w, h) ->
+                _uiState.update { state ->
+                    if (state.sourceVideoUri == uri.toString()) {
+                        state.copy(videoNaturalWidth = w, videoNaturalHeight = h)
+                    } else {
+                        state
+                    }
+                }
+            }
+        }
     }
 
     fun loadSourceVideoUrl(rawUrl: String) {
@@ -226,11 +254,6 @@ class ReactStudioViewModel(application: Application) : AndroidViewModel(applicat
             val result = InstagramLinkResolver.resolve(rawUrl)
             result.fold(
                 onSuccess = { resolved ->
-                    val defaultPreset = if (resolved.sourceType == VideoSourceType.INSTAGRAM_EMBED) {
-                        VideoAspectPreset.RATIO_9_16
-                    } else {
-                        VideoAspectPreset.FIT
-                    }
                     _uiState.update {
                         it.copy(
                             isResolvingLink = false,
@@ -439,31 +462,165 @@ class ReactStudioViewModel(application: Application) : AndroidViewModel(applicat
         _uiState.update { it.copy(reactionMarkers = (listOf(marker) + it.reactionMarkers).take(30)) }
     }
 
-    fun onRecordingStarted() {
+    /**
+     * Releases StudioAudioEngine's AudioRecord right before CameraX starts VideoCapture so the
+     * camera recorder gets exclusive, drift-free microphone access (prevents A/V desync on phones).
+     */
+    fun prepareForCameraRecording() {
+        audioEngine.stopMicrophoneMonitor()
+    }
+
+    fun onRecordingStarted(exactSourcePositionMs: Long, isSourcePlaying: Boolean) {
         recordingTimerJob?.cancel()
+        autoResumeJob?.cancel()
+        wasPlayingBeforeAutoPause = false
+        recordedSegments.clear()
+        activeSegRecStartMs = 0L
+        activeSegSourceStartMs = exactSourcePositionMs
+        activeSegLastSourceMs = exactSourcePositionMs
+        activeSegLastRecMs = 0L
+        activeSegIsPaused = !isSourcePlaying
+        recordingSmoothedDb = -60f
+        recordingSpeechStartAtMs = 0L
+        recordingLastSpeechAtMs = 0L
+        recordingSpeakingState = false
+
         _uiState.update {
+            val hasExoVideo = it.sourceVideoUri != null &&
+                it.sourceVideoType != VideoSourceType.INSTAGRAM_EMBED
             it.copy(
                 isRecording = true,
+                isFramingMode = false,
+                isManualReacting = false,
+                isAutoPausedByVoice = false,
+                isPlaying = if (hasExoVideo) true else it.isPlaying,
                 recordingElapsedMs = 0L,
-                recordingSourceStartMs = it.currentPositionMs,
+                recordingSourceStartMs = exactSourcePositionMs,
                 exportStatus = ExportStatus.Idle,
-                statusToast = "Gravação iniciada"
+                statusToast = if (hasExoVideo) {
+                    "Gravando · Vídeo superior iniciado em sincronia"
+                } else {
+                    "Gravação iniciada"
+                }
             )
         }
         val startAt = System.currentTimeMillis()
         recordingTimerJob = viewModelScope.launch {
             while (true) {
                 delay(250L)
-                _uiState.update { it.copy(recordingElapsedMs = System.currentTimeMillis() - startAt) }
+                _uiState.update { state ->
+                    val wallElapsed = System.currentTimeMillis() - startAt
+                    if (wallElapsed > state.recordingElapsedMs) {
+                        state.copy(recordingElapsedMs = wallElapsed)
+                    } else {
+                        state
+                    }
+                }
             }
         }
     }
 
-    fun onRecordingFinalized(savedUri: Uri?, errorMessage: String?) {
+    /**
+     * Driven directly by CameraX's VideoRecordEvent.Status hardware clock so top-video timeline
+     * segments and live voice reactions stay 100% locked to the recorded MP4 timestamps.
+     */
+    fun onRecordingStatusTick(
+        recordedDurationMs: Long,
+        audioAmplitude: Double,
+        liveSourcePositionMs: Long,
+        isSourcePlaying: Boolean
+    ) {
+        val recMs = recordedDurationMs.coerceAtLeast(activeSegLastRecMs)
+        val deltaRecMs = recMs - activeSegLastRecMs
+        val isPausedNow = !isSourcePlaying
+
+        // Detect play/pause transitions, loop wrap-arounds, or manual seeks on the top video
+        val expectedSourcePos = if (activeSegIsPaused) {
+            activeSegLastSourceMs
+        } else {
+            activeSegLastSourceMs + deltaRecMs
+        }
+        val jumped = !isPausedNow && !activeSegIsPaused && abs(liveSourcePositionMs - expectedSourcePos) > 650L
+        val stateChanged = isPausedNow != activeSegIsPaused
+
+        if (stateChanged || jumped) {
+            closeActiveSegment(recMs)
+            activeSegRecStartMs = recMs
+            activeSegSourceStartMs = liveSourcePositionMs
+            activeSegIsPaused = isPausedNow
+        }
+
+        activeSegLastRecMs = recMs
+        activeSegLastSourceMs = liveSourcePositionMs
+
+        // Feed CameraX's own mic amplitude into VU meter + Auto-React VAD (no competing AudioRecord!)
+        val amp = audioAmplitude.coerceIn(1e-6, 1.0)
+        val rawDb = (20.0 * log10(amp)).toFloat().coerceIn(-60f, 0f)
+        recordingSmoothedDb = if (rawDb > recordingSmoothedDb) {
+            recordingSmoothedDb * 0.45f + rawDb * 0.55f
+        } else {
+            recordingSmoothedDb * 0.78f + rawDb * 0.22f
+        }
+        val now = System.currentTimeMillis()
+        val threshold = _uiState.value.audioSettings.voiceThresholdDb
+        if (recordingSmoothedDb >= threshold) {
+            if (recordingSpeechStartAtMs == 0L) recordingSpeechStartAtMs = now
+            recordingLastSpeechAtMs = now
+            if (now - recordingSpeechStartAtMs >= 120L) {
+                recordingSpeakingState = true
+            }
+        } else {
+            recordingSpeechStartAtMs = 0L
+            if (recordingSpeakingState && now - recordingLastSpeechAtMs >= 550L) {
+                recordingSpeakingState = false
+            }
+        }
+
+        val normalized = ((recordingSmoothedDb + 60f) / 60f).coerceIn(0.05f, 1f)
+        _uiState.update { state ->
+            val nextBars = state.waveformBars.drop(1) + normalized
+            state.copy(
+                recordingElapsedMs = recMs,
+                currentMicDb = recordingSmoothedDb,
+                waveformBars = nextBars,
+                isSpeaking = recordingSpeakingState
+            )
+        }
+        handleVoiceActivityTransition(recordingSpeakingState, recordingSmoothedDb)
+    }
+
+    private fun closeActiveSegment(endRecMs: Long) {
+        val segDur = (endRecMs - activeSegRecStartMs).coerceAtLeast(0L)
+        if (segDur >= 150L) {
+            recordedSegments.add(
+                SourcePlaybackSegment(
+                    sourceStartMs = activeSegSourceStartMs,
+                    sourceEndMs = if (activeSegIsPaused) {
+                        activeSegSourceStartMs
+                    } else {
+                        (activeSegSourceStartMs + segDur).coerceAtLeast(activeSegLastSourceMs)
+                    },
+                    durationMs = segDur,
+                    isPaused = activeSegIsPaused
+                )
+            )
+        }
+    }
+
+    fun onRecordingFinalized(
+        savedUri: Uri?,
+        errorMessage: String?,
+        resumeAudioMonitor: Boolean = true
+    ) {
         recordingTimerJob?.cancel()
         recordingTimerJob = null
-        val elapsed = _uiState.value.recordingElapsedMs
+        val elapsed = maxOf(_uiState.value.recordingElapsedMs, activeSegLastRecMs)
+        closeActiveSegment(elapsed)
         val markerCount = _uiState.value.reactionMarkers.size
+
+        if (resumeAudioMonitor) {
+            audioEngine.startMicrophoneMonitor()
+        }
 
         if (savedUri != null) {
             val newTake = RecordedTake(
@@ -532,6 +689,7 @@ class ReactStudioViewModel(application: Application) : AndroidViewModel(applicat
             return
         }
 
+        val segmentsSnapshot = recordedSegments.toList()
         exportJob?.cancel()
         exportJob = viewModelScope.launch {
             _uiState.update { it.copy(exportStatus = ExportStatus.Combining(0.02f)) }
@@ -541,6 +699,8 @@ class ReactStudioViewModel(application: Application) : AndroidViewModel(applicat
                 sourceStartMs = state.recordingSourceStartMs,
                 sourceDurationMs = state.durationMs,
                 reactionDurationMs = take.durationMs.coerceAtLeast(2_000L),
+                recordedSegments = segmentsSnapshot,
+                isSourceMuted = state.isVideoMuted,
                 splitRatio = state.splitRatio,
                 framing = state.framing,
                 mirrorBottomCamera = state.isFrontCamera && state.isCameraMirrored,
@@ -771,6 +931,25 @@ class ReactStudioViewModel(application: Application) : AndroidViewModel(applicat
 
     fun showStatusToast(message: String) {
         _uiState.update { it.copy(statusToast = message) }
+    }
+
+    private fun probeVideoDimensions(uri: Uri): Pair<Int, Int>? {
+        val retriever = MediaMetadataRetriever()
+        return try {
+            retriever.setDataSource(getApplication<Application>(), uri)
+            val rawW = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH)?.toIntOrNull()
+                ?: return null
+            val rawH = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT)?.toIntOrNull()
+                ?: return null
+            val rot = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION)?.toIntOrNull()
+                ?: 0
+            if (rawW <= 0 || rawH <= 0) return null
+            if (rot == 90 || rot == 270) rawH to rawW else rawW to rawH
+        } catch (_: Exception) {
+            null
+        } finally {
+            runCatching { retriever.release() }
+        }
     }
 
     private fun resolveDisplayName(uri: Uri): String {

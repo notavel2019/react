@@ -105,6 +105,9 @@ jobs:
         env:
           APK_FILE: ${{ steps.version.outputs.apk_file }}
         run: |
+          if [[ ! -f debug.keystore && -f debug.keystore.base64 ]]; then
+            tr -d '\r\n' < debug.keystore.base64 | base64 -d > debug.keystore
+          fi
           if [[ ! -f debug.keystore ]]; then
             keytool -genkeypair -v -keystore debug.keystore -storepass android \
               -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 \

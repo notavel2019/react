@@ -1,6 +1,7 @@
 package com.example.ui.components
 
 import android.annotation.SuppressLint
+import android.graphics.Matrix
 import android.view.TextureView
 import android.webkit.WebResourceRequest
 import android.webkit.WebSettings
@@ -28,6 +29,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.requiredSize
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
@@ -382,6 +384,7 @@ private fun ActiveVideoViewport(
         val videoHeightDp = with(density) { videoBaseH.toDp() }
         val txPx = framing.offsetXFraction * containerW
         val tyPx = framing.offsetYFraction * containerH
+        val fitInside = framing.aspectPreset == VideoAspectPreset.FIT
 
         if (isInstagramEmbed) {
             val embedUrl = uiState.sourceVideoUri.orEmpty()
@@ -417,7 +420,7 @@ private fun ActiveVideoViewport(
                     }
                 },
                 modifier = Modifier
-                    .size(videoWidthDp, videoHeightDp)
+                    .requiredSize(videoWidthDp, videoHeightDp)
                     .graphicsLayer {
                         scaleX = framing.scale
                         scaleY = framing.scale
@@ -434,25 +437,42 @@ private fun ActiveVideoViewport(
                 }
             }
 
+            // Re-apply exact undistorted TextureView GPU transform whenever video size, framing, or quadrant changes
+            val currentTransformParams = remember(
+                naturalAspect,
+                fitInside,
+                framing.scale,
+                framing.offsetXFraction,
+                framing.offsetYFraction
+            ) {
+                TextureTransformParams(
+                    naturalAspect = naturalAspect,
+                    fitInside = fitInside,
+                    userScale = framing.scale,
+                    offsetXFraction = framing.offsetXFraction,
+                    offsetYFraction = framing.offsetYFraction
+                )
+            }
+
             AndroidView(
                 factory = { ctx ->
                     TextureView(ctx).also { tv ->
                         textureViewRef = tv
+                        tv.tag = currentTransformParams
+                        tv.addOnLayoutChangeListener { view, _, _, _, _, _, _, _, _ ->
+                            val params = view.tag as? TextureTransformParams ?: return@addOnLayoutChangeListener
+                            applyUndistortedTextureTransform(view as TextureView, params)
+                        }
                         exoPlayer.setVideoTextureView(tv)
                     }
                 },
                 update = { tv ->
                     textureViewRef = tv
+                    tv.tag = currentTransformParams
                     exoPlayer.setVideoTextureView(tv)
+                    applyUndistortedTextureTransform(tv, currentTransformParams)
                 },
-                modifier = Modifier
-                    .size(videoWidthDp, videoHeightDp)
-                    .graphicsLayer {
-                        scaleX = framing.scale
-                        scaleY = framing.scale
-                        translationX = txPx
-                        translationY = tyPx
-                    }
+                modifier = Modifier.fillMaxSize()
             )
         }
 
@@ -522,6 +542,51 @@ private fun ActiveVideoViewport(
             }
         }
     }
+}
+
+private data class TextureTransformParams(
+    val naturalAspect: Float,
+    val fitInside: Boolean,
+    val userScale: Float,
+    val offsetXFraction: Float,
+    val offsetYFraction: Float
+)
+
+/**
+ * Applies a GPU-level Matrix to TextureView so the video ALWAYS displays in its exact natural
+ * pixel aspect ratio (zero horizontal/vertical stretching) while filling the top quadrant
+ * edge-to-edge and matching SplitScreenVideoExporter's UndistortedQuadrantTransformation 1:1.
+ */
+private fun applyUndistortedTextureTransform(
+    textureView: TextureView,
+    params: TextureTransformParams
+) {
+    val viewW = textureView.width.toFloat()
+    val viewH = textureView.height.toFloat()
+    if (viewW <= 0f || viewH <= 0f || params.naturalAspect <= 0f) return
+
+    val viewAspect = viewW / viewH
+    val (baseSx, baseSy) = if (params.fitInside) {
+        if (params.naturalAspect > viewAspect) {
+            1f to (viewAspect / params.naturalAspect)
+        } else {
+            (params.naturalAspect / viewAspect) to 1f
+        }
+    } else {
+        if (params.naturalAspect > viewAspect) {
+            (params.naturalAspect / viewAspect) to 1f
+        } else {
+            1f to (viewAspect / params.naturalAspect)
+        }
+    }
+
+    val scale = params.userScale.coerceIn(0.5f, 4.0f)
+    val matrix = Matrix().apply {
+        setScale(baseSx * scale, baseSy * scale, viewW / 2f, viewH / 2f)
+        postTranslate(params.offsetXFraction * viewW, params.offsetYFraction * viewH)
+    }
+    textureView.setTransform(matrix)
+    textureView.invalidate()
 }
 
 private fun fitBox(maxW: Float, maxH: Float, aspect: Float): Pair<Float, Float> {

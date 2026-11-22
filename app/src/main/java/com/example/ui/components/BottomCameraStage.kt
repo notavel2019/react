@@ -114,7 +114,9 @@ fun BottomCameraStage(
     onToggleManualReact: () -> Unit,
     onOpenAudioPanel: () -> Unit,
     onOpenTakesPanel: () -> Unit,
+    onBeforeRecordingStart: () -> Unit,
     onRecordingStarted: () -> Unit,
+    onRecordingStatus: (Long, Double) -> Unit,
     onRecordingFinalized: (Uri?, String?) -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -255,6 +257,9 @@ fun BottomCameraStage(
             return
         }
 
+        // Release StudioAudioEngine's AudioRecord first so CameraX owns the microphone exclusively
+        onBeforeRecordingStart()
+
         val outputOptions = buildMediaStoreOutputOptions(context)
         var pending = capture.output.prepareRecording(context, outputOptions)
         if (hasAudioPermission) {
@@ -263,6 +268,11 @@ fun BottomCameraStage(
         activeRecording = pending.start(ContextCompat.getMainExecutor(context)) { event ->
             when (event) {
                 is VideoRecordEvent.Start -> onRecordingStarted()
+                is VideoRecordEvent.Status -> {
+                    val recMs = event.recordingStats.recordedDurationNanos / 1_000_000L
+                    val amp = event.recordingStats.audioStats.audioAmplitude
+                    onRecordingStatus(recMs, amp)
+                }
                 is VideoRecordEvent.Finalize -> {
                     activeRecording = null
                     if (event.hasError()) {

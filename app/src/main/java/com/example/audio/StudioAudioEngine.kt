@@ -269,7 +269,7 @@ class StudioAudioEngine(private val context: Context) {
 
             val record = runCatching {
                 AudioRecord(
-                    MediaRecorder.AudioSource.VOICE_COMMUNICATION,
+                    MediaRecorder.AudioSource.MIC,
                     sampleRate,
                     channelIn,
                     encoding,
@@ -371,6 +371,7 @@ class StudioAudioEngine(private val context: Context) {
     fun stopMicrophoneMonitor() {
         monitorJob?.cancel()
         monitorJob = null
+        releaseInputEffectsAndHardware()
     }
 
     private fun attachInputDspEffects(sessionId: Int) {
@@ -428,6 +429,7 @@ class StudioAudioEngine(private val context: Context) {
         }.getOrNull()
     }
 
+    @Synchronized
     private fun releaseInputEffectsAndHardware() {
         runCatching { noiseSuppressor?.release() }
         noiseSuppressor = null

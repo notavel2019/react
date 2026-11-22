@@ -137,6 +137,13 @@ data class ReactionMarker(
     val isAutoDetected: Boolean
 )
 
+data class SourcePlaybackSegment(
+    val sourceStartMs: Long,
+    val sourceEndMs: Long,
+    val durationMs: Long,
+    val isPaused: Boolean = false
+)
+
 data class RecordedTake(
     val id: String,
     val uriString: String,

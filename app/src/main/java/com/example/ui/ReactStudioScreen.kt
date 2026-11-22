@@ -153,7 +153,13 @@ fun ReactStudioScreen(
     DisposableEffect(exoPlayer) {
         val listener = object : Player.Listener {
             override fun onVideoSizeChanged(videoSize: VideoSize) {
-                viewModel.onVideoSizeChanged(videoSize.width, videoSize.height)
+                if (videoSize.width > 0 && videoSize.height > 0) {
+                    val rot = videoSize.unappliedRotationDegrees
+                    val effW = if (rot == 90 || rot == 270) videoSize.height else videoSize.width
+                    val effH = if (rot == 90 || rot == 270) videoSize.width else videoSize.height
+                    val displayW = (effW * videoSize.pixelWidthHeightRatio).toInt().coerceAtLeast(1)
+                    viewModel.onVideoSizeChanged(displayW, effH)
+                }
             }
 
             override fun onIsPlayingChanged(isPlaying: Boolean) {
@@ -357,8 +363,42 @@ fun ReactStudioScreen(
                         }
                     },
                     onOpenTakesPanel = { viewModel.openSheet(ActiveSheet.TAKES_HISTORY) },
-                    onRecordingStarted = viewModel::onRecordingStarted,
-                    onRecordingFinalized = viewModel::onRecordingFinalized,
+                    onBeforeRecordingStart = viewModel::prepareForCameraRecording,
+                    onRecordingStarted = {
+                        val hasExoVideo = uiState.sourceVideoUri != null &&
+                            uiState.sourceVideoType != VideoSourceType.INSTAGRAM_EMBED
+                        if (hasExoVideo) {
+                            if (exoPlayer.playbackState == Player.STATE_IDLE) {
+                                exoPlayer.prepare()
+                            } else if (exoPlayer.playbackState == Player.STATE_ENDED) {
+                                exoPlayer.seekTo(0L)
+                            }
+                            if (!exoPlayer.isPlaying) {
+                                exoPlayer.play()
+                            }
+                        }
+                        viewModel.onRecordingStarted(
+                            exactSourcePositionMs = exoPlayer.currentPosition.coerceAtLeast(0L),
+                            isSourcePlaying = if (hasExoVideo) true else exoPlayer.isPlaying
+                        )
+                    },
+                    onRecordingStatus = { recordedMs, amplitude ->
+                        val activePlayback = exoPlayer.isPlaying ||
+                            (exoPlayer.playWhenReady && exoPlayer.playbackState == Player.STATE_BUFFERING)
+                        viewModel.onRecordingStatusTick(
+                            recordedDurationMs = recordedMs,
+                            audioAmplitude = amplitude,
+                            liveSourcePositionMs = exoPlayer.currentPosition.coerceAtLeast(0L),
+                            isSourcePlaying = activePlayback
+                        )
+                    },
+                    onRecordingFinalized = { uri, err ->
+                        viewModel.onRecordingFinalized(
+                            savedUri = uri,
+                            errorMessage = err,
+                            resumeAudioMonitor = hasAudioPermission
+                        )
+                    },
                     modifier = Modifier.weight(1f - topWeight)
                 )
             }
