@@ -47,7 +47,6 @@ import androidx.compose.material.icons.rounded.Link
 import androidx.compose.material.icons.rounded.Pause
 import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Refresh
-import androidx.compose.material.icons.rounded.SystemUpdate
 import androidx.compose.material.icons.rounded.VideoLibrary
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -91,6 +90,7 @@ import androidx.media3.exoplayer.ExoPlayer
 import com.example.R
 import com.example.media.InstagramLinkResolver
 import com.example.model.StudioUiState
+import com.example.model.SubscriptionUiState
 import com.example.model.VideoAspectPreset
 import com.example.model.VideoSourceType
 import com.example.ui.theme.CoralCrimson
@@ -106,7 +106,7 @@ fun TopVideoStage(
     exoPlayer: ExoPlayer,
     onPickVideo: () -> Unit,
     onOpenUrlDialog: () -> Unit,
-    onOpenAppUpdates: () -> Unit,
+    onOpenSubscription: () -> Unit,
     onTogglePlayPause: () -> Unit,
     onRewind: () -> Unit,
     onForward: () -> Unit,
@@ -131,10 +131,10 @@ fun TopVideoStage(
     ) {
         if (uiState.sourceVideoUri == null) {
             EmptyVideoStage(
-                hasUpdateAvailable = uiState.hasUpdateAvailable,
+                subscription = uiState.subscription,
                 onPickVideo = onPickVideo,
                 onOpenUrlDialog = onOpenUrlDialog,
-                onOpenAppUpdates = onOpenAppUpdates
+                onOpenSubscription = onOpenSubscription
             )
         } else {
             ActiveVideoViewport(
@@ -250,10 +250,10 @@ fun TopVideoStage(
                             }
                         }
 
-                        // GitHub Updates Button
-                        UpdateBadgeIconButton(
-                            hasUpdateAvailable = uiState.hasUpdateAvailable,
-                            onClick = onOpenAppUpdates
+                        // Subscription / 4-Day Trial Status Pill
+                        SubscriptionStatusChip(
+                            subscription = uiState.subscription,
+                            onClick = onOpenSubscription
                         )
 
                         // Framing Mode Button
@@ -602,41 +602,6 @@ private fun fitBox(maxW: Float, maxH: Float, aspect: Float): Pair<Float, Float> 
 }
 
 @Composable
-private fun UpdateBadgeIconButton(
-    hasUpdateAvailable: Boolean,
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier
-) {
-    Box(modifier = modifier) {
-        IconButton(
-            onClick = onClick,
-            modifier = Modifier
-                .size(38.dp)
-                .minimumInteractiveComponentSize()
-                .clip(CircleShape)
-                .background(Color(0xB310141E))
-                .testTag("app_updates_button")
-        ) {
-            Icon(
-                imageVector = Icons.Rounded.SystemUpdate,
-                contentDescription = stringResource(R.string.cd_app_updates),
-                tint = if (hasUpdateAvailable) CoralCrimson else MaterialTheme.colorScheme.onSurface,
-                modifier = Modifier.size(18.dp)
-            )
-        }
-        if (hasUpdateAvailable) {
-            Box(
-                modifier = Modifier
-                    .size(9.dp)
-                    .align(Alignment.TopEnd)
-                    .clip(CircleShape)
-                    .background(CoralCrimson)
-            )
-        }
-    }
-}
-
-@Composable
 private fun FramingControlsOverlay(
     uiState: StudioUiState,
     onScaleChange: (Float) -> Unit,
@@ -934,10 +899,10 @@ private fun PlaybackTransportBar(
 
 @Composable
 private fun EmptyVideoStage(
-    hasUpdateAvailable: Boolean,
+    subscription: SubscriptionUiState,
     onPickVideo: () -> Unit,
     onOpenUrlDialog: () -> Unit,
-    onOpenAppUpdates: () -> Unit
+    onOpenSubscription: () -> Unit
 ) {
     Box(modifier = Modifier.fillMaxSize()) {
         Image(
@@ -960,14 +925,14 @@ private fun EmptyVideoStage(
                 )
         )
 
-        // Top-right Updates shortcut button
-        UpdateBadgeIconButton(
-            hasUpdateAvailable = hasUpdateAvailable,
-            onClick = onOpenAppUpdates,
+        // Top-right Trial / Pro Plan shortcut chip
+        SubscriptionStatusChip(
+            subscription = subscription,
+            onClick = onOpenSubscription,
             modifier = Modifier
                 .align(Alignment.TopEnd)
                 .statusBarsPadding()
-                .padding(top = 8.dp, end = 12.dp)
+                .padding(top = 10.dp, end = 12.dp)
         )
 
         Column(

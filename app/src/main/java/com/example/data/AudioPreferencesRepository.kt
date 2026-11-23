@@ -6,6 +6,7 @@ import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.floatPreferencesKey
+import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.example.model.AudioSettingsState
@@ -13,10 +14,17 @@ import com.example.model.AutoReactMode
 import com.example.model.HeadphoneEqProfile
 import com.example.model.SplitRatioPreset
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 
 private val Context.studioDataStore: DataStore<Preferences> by preferencesDataStore(
     name = "react_studio_preferences"
+)
+
+data class StoredTrialRecord(
+    val startedAtMs: Long?,
+    val integritySig: String?,
+    val lastSeenMs: Long?
 )
 
 class AudioPreferencesRepository(private val context: Context) {
@@ -37,7 +45,9 @@ class AudioPreferencesRepository(private val context: Context) {
         val MIX_BALANCE = floatPreferencesKey("mix_balance")
         val EQ_PROFILE = stringPreferencesKey("eq_profile")
         val SPLIT_RATIO = stringPreferencesKey("split_ratio")
-        val GITHUB_REPO = stringPreferencesKey("github_repo")
+        val TRIAL_STARTED_AT_MS = longPreferencesKey("trial_started_at_ms")
+        val TRIAL_INTEGRITY_SIG = stringPreferencesKey("trial_integrity_sig")
+        val TRIAL_LAST_SEEN_MS = longPreferencesKey("trial_last_seen_ms")
     }
 
     val audioSettingsFlow: Flow<AudioSettingsState> = context.studioDataStore.data.map { prefs ->
@@ -68,8 +78,21 @@ class AudioPreferencesRepository(private val context: Context) {
         SplitRatioPreset.entries.firstOrNull { it.name == splitName } ?: SplitRatioPreset.BALANCED
     }
 
-    val githubRepoFlow: Flow<String> = context.studioDataStore.data.map { prefs ->
-        prefs[Keys.GITHUB_REPO] ?: ""
+    suspend fun readTrialRecord(): StoredTrialRecord {
+        val prefs = context.studioDataStore.data.first()
+        return StoredTrialRecord(
+            startedAtMs = prefs[Keys.TRIAL_STARTED_AT_MS],
+            integritySig = prefs[Keys.TRIAL_INTEGRITY_SIG],
+            lastSeenMs = prefs[Keys.TRIAL_LAST_SEEN_MS]
+        )
+    }
+
+    suspend fun saveTrialRecord(startedAtMs: Long, integritySig: String, lastSeenMs: Long) {
+        context.studioDataStore.edit { prefs ->
+            prefs[Keys.TRIAL_STARTED_AT_MS] = startedAtMs
+            prefs[Keys.TRIAL_INTEGRITY_SIG] = integritySig
+            prefs[Keys.TRIAL_LAST_SEEN_MS] = lastSeenMs
+        }
     }
 
     suspend fun saveAudioSettings(settings: AudioSettingsState) {
@@ -94,12 +117,6 @@ class AudioPreferencesRepository(private val context: Context) {
     suspend fun saveSplitRatio(preset: SplitRatioPreset) {
         context.studioDataStore.edit { prefs ->
             prefs[Keys.SPLIT_RATIO] = preset.name
-        }
-    }
-
-    suspend fun saveGithubRepo(repo: String) {
-        context.studioDataStore.edit { prefs ->
-            prefs[Keys.GITHUB_REPO] = repo.trim()
         }
     }
 }

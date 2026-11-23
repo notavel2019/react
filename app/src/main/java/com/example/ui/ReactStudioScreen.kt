@@ -1,6 +1,9 @@
 package com.example.ui
 
 import android.Manifest
+import android.app.Activity
+import android.content.Context
+import android.content.ContextWrapper
 import android.content.pm.PackageManager
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -68,11 +71,12 @@ import com.example.model.ActiveSheet
 import com.example.model.AudioPanelTab
 import com.example.model.StudioUiState
 import com.example.model.VideoSourceType
-import com.example.ui.components.AppUpdateModalSheet
 import com.example.ui.components.AudioConsoleContent
 import com.example.ui.components.AudioConsoleModalSheet
 import com.example.ui.components.BottomCameraStage
 import com.example.ui.components.ExportShareModalSheet
+import com.example.ui.components.SubscriptionModalSheet
+import com.example.ui.components.SubscriptionPaywallOverlay
 import com.example.ui.components.TakesHistoryModalSheet
 import com.example.ui.components.TopVideoStage
 import com.example.ui.components.VideoUrlDialog
@@ -191,11 +195,14 @@ fun ReactStudioScreen(
         }
     }
 
-    DisposableEffect(lifecycleOwner, hasAudioPermission) {
+    DisposableEffect(lifecycleOwner, hasAudioPermission, uiState.subscription.isLocked) {
         val observer = LifecycleEventObserver { _, event ->
             when (event) {
                 Lifecycle.Event.ON_RESUME -> {
-                    if (hasAudioPermission) viewModel.startAudioMonitoring()
+                    viewModel.refreshSubscriptionState()
+                    if (hasAudioPermission && !uiState.subscription.isLocked) {
+                        viewModel.startAudioMonitoring()
+                    }
                 }
                 Lifecycle.Event.ON_PAUSE -> {
                     viewModel.stopAudioMonitoring()
@@ -205,8 +212,11 @@ fun ReactStudioScreen(
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
-        if (hasAudioPermission) {
+        if (hasAudioPermission && !uiState.subscription.isLocked) {
             viewModel.startAudioMonitoring()
+        } else if (uiState.subscription.isLocked) {
+            viewModel.stopAudioMonitoring()
+            if (exoPlayer.isPlaying) exoPlayer.pause()
         }
         onDispose {
             lifecycleOwner.lifecycle.removeObserver(observer)
@@ -323,7 +333,7 @@ fun ReactStudioScreen(
                     exoPlayer = exoPlayer,
                     onPickVideo = ::launchVideoPicker,
                     onOpenUrlDialog = { viewModel.openSheet(ActiveSheet.VIDEO_URL_DIALOG) },
-                    onOpenAppUpdates = { viewModel.openSheet(ActiveSheet.APP_UPDATES) },
+                    onOpenSubscription = { viewModel.openSheet(ActiveSheet.SUBSCRIPTION) },
                     onTogglePlayPause = viewModel::togglePlayPause,
                     onRewind = { viewModel.seekBy(-5_000L) },
                     onForward = { viewModel.seekBy(5_000L) },
@@ -475,11 +485,19 @@ fun ReactStudioScreen(
             )
         }
 
-        if (uiState.activeSheet == ActiveSheet.APP_UPDATES) {
-            AppUpdateModalSheet(
-                uiState = uiState,
-                onSaveRepoAndCheck = viewModel::saveGithubRepoAndCheck,
-                onShowMessage = viewModel::showStatusToast,
+        if (uiState.activeSheet == ActiveSheet.SUBSCRIPTION && !uiState.subscription.isLocked) {
+            SubscriptionModalSheet(
+                subscription = uiState.subscription,
+                onSubscribeClick = {
+                    val activity = context.findActivity()
+                    if (activity != null) {
+                        viewModel.launchAnnualSubscription(activity)
+                    } else {
+                        viewModel.showStatusToast("Não foi possível abrir o checkout da Google Play.")
+                    }
+                },
+                onRestoreClick = viewModel::restoreSubscriptionPurchases,
+                onManageSubscriptionClick = { viewModel.openSubscriptionManagement(context) },
                 onDismiss = viewModel::closeSheet
             )
         }
@@ -491,7 +509,30 @@ fun ReactStudioScreen(
                 onLoadUrl = viewModel::loadSourceVideoUrl
             )
         }
+
+        // Full-screen paywall once the 4-day total trial expires without an active Google Play subscription
+        if (uiState.subscription.isLocked) {
+            SubscriptionPaywallOverlay(
+                subscription = uiState.subscription,
+                onSubscribeClick = {
+                    val activity = context.findActivity()
+                    if (activity != null) {
+                        viewModel.launchAnnualSubscription(activity)
+                    } else {
+                        viewModel.showStatusToast("Não foi possível abrir o checkout da Google Play.")
+                    }
+                },
+                onRestoreClick = viewModel::restoreSubscriptionPurchases,
+                onManageSubscriptionClick = { viewModel.openSubscriptionManagement(context) }
+            )
+        }
     }
+}
+
+private tailrec fun Context.findActivity(): Activity? = when (this) {
+    is Activity -> this
+    is ContextWrapper -> baseContext.findActivity()
+    else -> null
 }
 
 @Composable

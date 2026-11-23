@@ -1,20 +1,24 @@
 package com.example.viewmodel
 
+import android.app.Activity
 import android.app.Application
 import android.content.ContentUris
+import android.content.Context
 import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.provider.MediaStore
 import android.provider.OpenableColumns
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
-import com.example.BuildConfig
 import com.example.audio.StudioAudioEngine
+import com.example.billing.PlayBillingManager
+import com.example.billing.PlayBillingSnapshot
+import com.example.billing.TrialEntitlementManager
+import com.example.billing.TrialSnapshot
 import com.example.data.AudioPreferencesRepository
 import com.example.media.InstagramLinkResolver
 import com.example.media.SplitScreenVideoExporter
 import com.example.model.ActiveSheet
-import com.example.model.AppUpdateStatus
 import com.example.model.AudioPanelTab
 import com.example.model.AudioSettingsState
 import com.example.model.AutoReactMode
@@ -25,11 +29,12 @@ import com.example.model.RecordedTake
 import com.example.model.SourcePlaybackSegment
 import com.example.model.SplitRatioPreset
 import com.example.model.StudioUiState
+import com.example.model.SubscriptionAccessState
+import com.example.model.SubscriptionUiState
 import com.example.model.VideoAspectPreset
 import com.example.model.VideoSourceType
 import kotlin.math.abs
 import kotlin.math.log10
-import com.example.update.GitHubUpdateRepository
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -56,6 +61,8 @@ class ReactStudioViewModel(application: Application) : AndroidViewModel(applicat
 
     private val prefsRepo = AudioPreferencesRepository(application)
     private val splitExporter = SplitScreenVideoExporter(application)
+    private val billingManager = PlayBillingManager(application)
+    private val trialManager = TrialEntitlementManager(application, prefsRepo)
     val audioEngine = StudioAudioEngine(application)
 
     private val _uiState = MutableStateFlow(
@@ -73,6 +80,8 @@ class ReactStudioViewModel(application: Application) : AndroidViewModel(applicat
     private var recordingTimerJob: Job? = null
     private var autoResumeJob: Job? = null
     private var exportJob: Job? = null
+    private var trialTickerJob: Job? = null
+    private var latestTrialSnapshot: TrialSnapshot? = null
     private var lastAutoMarkerAtMs = 0L
     private var wasPlayingBeforeAutoPause = false
     private var lastSpeakingState = false
@@ -92,6 +101,7 @@ class ReactStudioViewModel(application: Application) : AndroidViewModel(applicat
     init {
         loadInitialPreferences()
         observeAudioTelemetry()
+        observeBillingAndTrial()
         refreshRecordedTakes()
     }
 
@@ -99,18 +109,62 @@ class ReactStudioViewModel(application: Application) : AndroidViewModel(applicat
         viewModelScope.launch {
             val savedAudio = prefsRepo.audioSettingsFlow.first()
             val savedSplit = prefsRepo.splitRatioFlow.first()
-            val savedRepo = prefsRepo.githubRepoFlow.first()
             audioEngine.updateSettings(savedAudio)
             _uiState.update {
                 it.copy(
                     audioSettings = savedAudio,
-                    splitRatio = savedSplit,
-                    githubRepo = savedRepo
+                    splitRatio = savedSplit
                 )
             }
-            if (savedRepo.isNotBlank()) {
-                checkForAppUpdates(silent = true)
+        }
+    }
+
+    private fun observeBillingAndTrial() {
+        billingManager.startConnection()
+        viewModelScope.launch {
+            latestTrialSnapshot = trialManager.evaluateTrial()
+            recomputeSubscriptionUi(billingManager.snapshot.value, latestTrialSnapshot)
+        }
+        viewModelScope.launch {
+            billingManager.snapshot.collect { billing ->
+                recomputeSubscriptionUi(billing, latestTrialSnapshot)
             }
+        }
+        trialTickerJob?.cancel()
+        trialTickerJob = viewModelScope.launch {
+            while (true) {
+                delay(60_000L)
+                latestTrialSnapshot = trialManager.evaluateTrial()
+                recomputeSubscriptionUi(billingManager.snapshot.value, latestTrialSnapshot)
+            }
+        }
+    }
+
+    private fun recomputeSubscriptionUi(
+        billing: PlayBillingSnapshot,
+        trial: TrialSnapshot?
+    ) {
+        val accessState = when {
+            billing.isSubscribed -> SubscriptionAccessState.PRO_SUBSCRIBED
+            billing.isPendingPayment -> SubscriptionAccessState.PENDING_PAYMENT
+            trial == null -> SubscriptionAccessState.CHECKING
+            trial.isTrialActive -> SubscriptionAccessState.TRIAL_ACTIVE
+            else -> SubscriptionAccessState.TRIAL_EXPIRED
+        }
+        _uiState.update { state ->
+            state.copy(
+                subscription = SubscriptionUiState(
+                    accessState = accessState,
+                    trialRemainingMs = trial?.remainingMs ?: state.subscription.trialRemainingMs,
+                    trialEndsAtMs = trial?.trialEndsAtMs ?: state.subscription.trialEndsAtMs,
+                    isClockTampered = trial?.isClockTampered ?: false,
+                    formattedAnnualPrice = billing.formattedAnnualPrice,
+                    hasPlayFreeTrialOffer = billing.hasPlayFreeTrialOffer,
+                    isBillingLoading = billing.isLoading,
+                    isBillingUnavailable = billing.isBillingUnavailable,
+                    billingMessage = billing.billingMessage
+                )
+            )
         }
     }
 
@@ -757,11 +811,8 @@ class ReactStudioViewModel(application: Application) : AndroidViewModel(applicat
                 source
             }
         }
-        val repo = state.githubRepo
-        if (repo.isNotBlank()) {
-            return "https://github.com/$repo/releases/latest"
-        }
-        return state.lastRecordedTake?.uriString ?: "https://reactstudio.app"
+        val pkg = getApplication<Application>().packageName
+        return "https://play.google.com/store/apps/details?id=$pkg"
     }
 
     fun refreshRecordedTakes() {
@@ -816,69 +867,27 @@ class ReactStudioViewModel(application: Application) : AndroidViewModel(applicat
         }
     }
 
-    // --- GitHub In-App Updates ---
+    // --- Google Play Subscription & 4-Day Trial ---
 
-    fun saveGithubRepoAndCheck(rawInput: String) {
-        val normalized = GitHubUpdateRepository.normalizeRepoSlug(rawInput)
-        if (normalized == null) {
-            _uiState.update {
-                it.copy(
-                    appUpdateStatus = AppUpdateStatus.Error(
-                        "Formato inválido. Use usuario/repositorio (ex: meuusuario/react-studio)."
-                    )
-                )
-            }
-            return
-        }
-        _uiState.update { it.copy(githubRepo = normalized) }
+    fun refreshSubscriptionState() {
+        billingManager.refreshAll()
         viewModelScope.launch {
-            prefsRepo.saveGithubRepo(normalized)
-            checkForAppUpdates(silent = false)
+            latestTrialSnapshot = trialManager.evaluateTrial()
+            recomputeSubscriptionUi(billingManager.snapshot.value, latestTrialSnapshot)
         }
     }
 
-    fun checkForAppUpdates(silent: Boolean = false) {
-        val repo = _uiState.value.githubRepo
-        if (repo.isBlank()) {
-            if (!silent) {
-                _uiState.update {
-                    it.copy(appUpdateStatus = AppUpdateStatus.Error("Informe seu repositório GitHub acima."))
-                }
-            }
-            return
-        }
-        viewModelScope.launch {
-            if (!silent) {
-                _uiState.update { it.copy(appUpdateStatus = AppUpdateStatus.Checking) }
-            }
-            val currentVersion = BuildConfig.VERSION_NAME
-            val result = GitHubUpdateRepository.fetchLatestRelease(repo)
-            result.fold(
-                onSuccess = { release ->
-                    val newer = GitHubUpdateRepository.isRemoteNewer(currentVersion, release.versionName)
-                    _uiState.update {
-                        it.copy(
-                            appUpdateStatus = if (newer) {
-                                AppUpdateStatus.UpdateAvailable(currentVersion, release)
-                            } else {
-                                AppUpdateStatus.UpToDate(currentVersion, release.tagName)
-                            }
-                        )
-                    }
-                },
-                onFailure = { err ->
-                    if (!silent) {
-                        _uiState.update {
-                            it.copy(
-                                appUpdateStatus = AppUpdateStatus.Error(
-                                    err.message ?: "Não foi possível consultar o GitHub."
-                                )
-                            )
-                        }
-                    }
-                }
-            )
-        }
+    fun launchAnnualSubscription(activity: Activity) {
+        billingManager.clearBillingMessage()
+        billingManager.launchSubscriptionPurchase(activity)
+    }
+
+    fun restoreSubscriptionPurchases() {
+        billingManager.restorePurchases()
+    }
+
+    fun openSubscriptionManagement(targetContext: Context) {
+        billingManager.openSubscriptionManagement(targetContext)
     }
 
     // --- Audio Settings ---
@@ -966,6 +975,8 @@ class ReactStudioViewModel(application: Application) : AndroidViewModel(applicat
         recordingTimerJob?.cancel()
         autoResumeJob?.cancel()
         exportJob?.cancel()
+        trialTickerJob?.cancel()
+        billingManager.release()
         audioEngine.release()
     }
 }

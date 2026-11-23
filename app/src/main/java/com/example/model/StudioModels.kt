@@ -61,7 +61,7 @@ enum class ActiveSheet {
     TAKES_HISTORY,
     VIDEO_URL_DIALOG,
     EXPORT_SHARE,
-    APP_UPDATES
+    SUBSCRIPTION
 }
 
 sealed class ExportStatus {
@@ -71,24 +71,48 @@ sealed class ExportStatus {
     data class Error(val message: String) : ExportStatus()
 }
 
-data class GitHubReleaseInfo(
-    val tagName: String,
-    val versionName: String,
-    val releaseTitle: String,
-    val releaseNotes: String,
-    val publishedAt: String,
-    val htmlUrl: String,
-    val apkDownloadUrl: String?,
-    val apkAssetName: String?,
-    val apkSizeBytes: Long
-)
+enum class SubscriptionAccessState {
+    CHECKING,
+    TRIAL_ACTIVE,
+    PRO_SUBSCRIBED,
+    PENDING_PAYMENT,
+    TRIAL_EXPIRED
+}
 
-sealed class AppUpdateStatus {
-    data object Idle : AppUpdateStatus()
-    data object Checking : AppUpdateStatus()
-    data class UpToDate(val currentVersion: String, val latestTag: String?) : AppUpdateStatus()
-    data class UpdateAvailable(val currentVersion: String, val release: GitHubReleaseInfo) : AppUpdateStatus()
-    data class Error(val message: String) : AppUpdateStatus()
+data class SubscriptionUiState(
+    val accessState: SubscriptionAccessState = SubscriptionAccessState.CHECKING,
+    val trialRemainingMs: Long = 4L * 24L * 60L * 60L * 1000L,
+    val trialEndsAtMs: Long = 0L,
+    val isClockTampered: Boolean = false,
+    val formattedAnnualPrice: String = "R$ 20,00",
+    val hasPlayFreeTrialOffer: Boolean = false,
+    val isBillingLoading: Boolean = true,
+    val isBillingUnavailable: Boolean = false,
+    val billingMessage: String? = null
+) {
+    val isPro: Boolean
+        get() = accessState == SubscriptionAccessState.PRO_SUBSCRIBED
+
+    val isLocked: Boolean
+        get() = accessState == SubscriptionAccessState.TRIAL_EXPIRED ||
+            accessState == SubscriptionAccessState.PENDING_PAYMENT
+
+    val remainingDaysRoundedUp: Int
+        get() = ((trialRemainingMs + 86_399_999L) / 86_400_000L).toInt().coerceIn(0, 4)
+
+    val badgeLabel: String
+        get() = when (accessState) {
+            SubscriptionAccessState.PRO_SUBSCRIBED -> "PRO"
+            SubscriptionAccessState.TRIAL_ACTIVE -> {
+                val totalHours = (trialRemainingMs / 3_600_000L).coerceAtLeast(1L)
+                val days = totalHours / 24L
+                val hours = totalHours % 24L
+                if (days > 0L) "TESTE · ${days}d" else "TESTE · ${hours}h"
+            }
+            SubscriptionAccessState.PENDING_PAYMENT -> "PENDENTE"
+            SubscriptionAccessState.TRIAL_EXPIRED -> "ASSINAR"
+            SubscriptionAccessState.CHECKING -> "PRO"
+        }
 }
 
 data class VideoFramingState(
@@ -196,8 +220,7 @@ data class StudioUiState(
     val agcSupported: Boolean = true,
     val reactionMarkers: List<ReactionMarker> = emptyList(),
     val recordedTakes: List<RecordedTake> = emptyList(),
-    val githubRepo: String = "",
-    val appUpdateStatus: AppUpdateStatus = AppUpdateStatus.Idle,
+    val subscription: SubscriptionUiState = SubscriptionUiState(),
     val activeSheet: ActiveSheet = ActiveSheet.NONE,
     val activeAudioTab: AudioPanelTab = AudioPanelTab.MICROPHONE,
     val statusToast: String? = null
@@ -209,9 +232,6 @@ data class StudioUiState(
         get() = sourceVideoUri != null &&
             sourceVideoType != VideoSourceType.INSTAGRAM_EMBED &&
             lastRecordedTake != null
-
-    val hasUpdateAvailable: Boolean
-        get() = appUpdateStatus is AppUpdateStatus.UpdateAvailable
 
     val effectiveVideoVolume: Float
         get() {

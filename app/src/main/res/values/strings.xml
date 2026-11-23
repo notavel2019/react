@@ -90,12 +90,26 @@
     <string name="export_copy_link">Copiar link</string>
     <string name="export_cloud_link">Gerar link na nuvem (Drive / Fotos)</string>
 
-    <!-- GitHub Updates Sheet -->
-    <string name="updates_title">Atualizações via GitHub</string>
-    <string name="updates_subtitle">Conecte seu repositório GitHub com Actions para verificar e baixar novas versões direto do app.</string>
-    <string name="updates_repo_label">Repositório GitHub (usuario/repositorio)</string>
-    <string name="updates_check_button">Verificar atualização</string>
-    <string name="updates_download_button">Baixar nova versão no GitHub</string>
+    <!-- Subscription & 4-Day Trial (Google Play Billing) -->
+    <string name="cd_subscription_plan">Plano anual e período de teste</string>
+    <string name="sub_title">React Studio Pro</string>
+    <string name="sub_plan_name">Plano Anual Completo</string>
+    <string name="sub_plan_trial_badge">4 DIAS DE TESTE TOTAL · DEPOIS ANUAL</string>
+    <string name="sub_per_year">por ano</string>
+    <string name="sub_trial_active_title">Teste completo de 4 dias ativo</string>
+    <string name="sub_active_pro_title">Assinatura Pro Ativa</string>
+    <string name="sub_active_pro_desc">Acesso total liberado (%1$s/ano) gerenciado pela Google Play.</string>
+    <string name="sub_expired_title">Seu teste de 4 dias terminou</string>
+    <string name="sub_expired_subtitle">Assine o React Studio Pro por apenas R$ 20,00 ao ano para continuar gravando, enquadrando e exportando suas reações sem limites.</string>
+    <string name="sub_pending_title">Pagamento em processamento</string>
+    <string name="sub_pending_desc">Sua compra está aguardando confirmação da Google Play. Assim que confirmada, o acesso será liberado automaticamente.</string>
+    <string name="sub_clock_tampered_desc">Detectamos alteração na data/hora do aparelho. Ajuste o relógio automático do Android ou ative sua assinatura anual para continuar.</string>
+    <string name="sub_cta_annual">Assinar por %1$s / ano</string>
+    <string name="sub_cta_with_trial">Testar 4 dias grátis · Depois %1$s/ano</string>
+    <string name="sub_restore_purchases">Restaurar compra</string>
+    <string name="sub_manage_in_play">Gerenciar assinatura na Google Play</string>
+    <string name="sub_play_disclosure">Teste completo por 4 dias. A assinatura anual de %1$s/ano é cobrada na sua conta Google Play e renovada automaticamente a cada 12 meses, a menos que seja cancelada antes do fim do período atual em Google Play &gt; Assinaturas.</string>
+    <string name="sub_privacy_and_terms">Política de Privacidade e Termos de Uso</string>
 
     <!-- Takes Sheet -->
     <string name="takes_title">Gravações e Reações</string>

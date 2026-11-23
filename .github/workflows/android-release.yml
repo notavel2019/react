@@ -84,20 +84,22 @@ jobs:
             echo "has_release_key=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Build Release APK (signed)
+      - name: Build Release AAB (Google Play) & APK (signed)
         if: steps.keystore.outputs.has_release_key == 'true'
         env:
           KEYSTORE_PATH: ${{ github.workspace }}/my-upload-key.jks
           STORE_PASSWORD: ${{ secrets.STORE_PASSWORD }}
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
           APK_FILE: ${{ steps.version.outputs.apk_file }}
+          AAB_FILE: ReactStudio-v${{ steps.version.outputs.version_name }}.aab
         run: |
           chmod +x gradlew || true
           if [[ -f ./gradlew ]]; then
-            ./gradlew :app:assembleRelease
+            ./gradlew :app:bundleRelease :app:assembleRelease
           else
-            gradle :app:assembleRelease
+            gradle :app:bundleRelease :app:assembleRelease
           fi
+          cp app/build/outputs/bundle/release/app-release.aab "${AAB_FILE}"
           cp app/build/outputs/apk/release/app-release.apk "${APK_FILE}"
 
       - name: Build Debug APK (fallback when release signing secrets are not set)
@@ -121,11 +123,14 @@ jobs:
           fi
           cp app/build/outputs/apk/debug/app-debug.apk "${APK_FILE}"
 
-      - name: Upload APK as Action Artifact
+      - name: Upload Build Artifacts (AAB / APK)
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ steps.version.outputs.apk_file }}
-          path: ${{ steps.version.outputs.apk_file }}
+          name: ReactStudio-v${{ steps.version.outputs.version_name }}
+          path: |
+            ${{ steps.version.outputs.apk_file }}
+            ReactStudio-v${{ steps.version.outputs.version_name }}.aab
+          if-no-files-found: warn
           retention-days: 30
 
       - name: Publish GitHub Release
@@ -134,17 +139,21 @@ jobs:
           tag_name: ${{ steps.version.outputs.tag_name }}
           name: React Studio ${{ steps.version.outputs.tag_name }}
           generate_release_notes: true
-          files: ${{ steps.version.outputs.apk_file }}
+          files: |
+            ${{ steps.version.outputs.apk_file }}
+            ReactStudio-v${{ steps.version.outputs.version_name }}.aab
 
       - name: Add Direct Download Link to Summary
         shell: bash
         env:
           TAG_NAME: ${{ steps.version.outputs.tag_name }}
           APK_FILE: ${{ steps.version.outputs.apk_file }}
+          AAB_FILE: ReactStudio-v${{ steps.version.outputs.version_name }}.aab
         run: |
           {
-            echo "## React Studio ${TAG_NAME} pronto para download"
+            echo "## React Studio ${TAG_NAME} pronto para publicação"
             echo ""
-            echo "- **Baixar APK direto:** https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG_NAME}/${APK_FILE}"
+            echo "- **AAB para Google Play Console:** https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG_NAME}/${AAB_FILE}"
+            echo "- **APK para testes:** https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG_NAME}/${APK_FILE}"
             echo "- **Página da Release:** https://github.com/${GITHUB_REPOSITORY}/releases/tag/${TAG_NAME}"
           } >> "$GITHUB_STEP_SUMMARY"
