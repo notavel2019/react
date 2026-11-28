@@ -26,6 +26,8 @@ import androidx.media3.transformer.ExportException
 import androidx.media3.transformer.ExportResult
 import androidx.media3.transformer.ProgressHolder
 import androidx.media3.transformer.Transformer
+import com.example.model.PipCameraOverlayState
+import com.example.model.ReactLayoutMode
 import com.example.model.SourcePlaybackSegment
 import com.example.model.SplitRatioPreset
 import com.example.model.VideoAspectPreset
@@ -120,6 +122,8 @@ class SplitScreenVideoExporter(private val context: Context) {
         recordedSegments: List<SourcePlaybackSegment>,
         isSourceMuted: Boolean,
         splitRatio: SplitRatioPreset,
+        layoutMode: ReactLayoutMode = ReactLayoutMode.SPLIT_SCREEN,
+        pipOverlay: PipCameraOverlayState = PipCameraOverlayState(),
         framing: VideoFramingState,
         mirrorBottomCamera: Boolean,
         onProgress: (Float) -> Unit
@@ -159,6 +163,8 @@ class SplitScreenVideoExporter(private val context: Context) {
                 recordedSegments = recordedSegments,
                 allowFreezeFrames = hasPausedSegments,
                 splitRatio = splitRatio,
+                layoutMode = layoutMode,
+                pipOverlay = pipOverlay,
                 framing = framing,
                 mirrorBottomCamera = mirrorBottomCamera,
                 outputPath = outputFile.absolutePath,
@@ -178,6 +184,8 @@ class SplitScreenVideoExporter(private val context: Context) {
                     recordedSegments = recordedSegments.filterNot { it.isPaused },
                     allowFreezeFrames = false,
                     splitRatio = splitRatio,
+                    layoutMode = layoutMode,
+                    pipOverlay = pipOverlay,
                     framing = framing,
                     mirrorBottomCamera = mirrorBottomCamera,
                     outputPath = outputFile.absolutePath,
@@ -218,6 +226,8 @@ class SplitScreenVideoExporter(private val context: Context) {
         recordedSegments: List<SourcePlaybackSegment>,
         allowFreezeFrames: Boolean,
         splitRatio: SplitRatioPreset,
+        layoutMode: ReactLayoutMode,
+        pipOverlay: PipCameraOverlayState,
         framing: VideoFramingState,
         mirrorBottomCamera: Boolean,
         outputPath: String,
@@ -226,11 +236,17 @@ class SplitScreenVideoExporter(private val context: Context) {
     ): Result<Unit> {
         val outWidth = 720
         val outHeight = 1280
-        val topWeight = splitRatio.topWeight.coerceIn(0.35f, 0.65f)
-        val topHeight = ((outHeight * topWeight).toInt() / 2) * 2
-        val bottomHeight = outHeight - topHeight
+        val isSplitMode = layoutMode == ReactLayoutMode.SPLIT_SCREEN
 
-        val topItems = withContext(Dispatchers.IO) {
+        val topWeight = splitRatio.topWeight.coerceIn(0.35f, 0.65f)
+        val sourceCanvasHeight = if (isSplitMode) {
+            ((outHeight * topWeight).toInt() / 2) * 2
+        } else {
+            outHeight // Full-screen 9:16 background video!
+        }
+        val bottomHeight = outHeight - sourceCanvasHeight
+
+        val sourceItems = withContext(Dispatchers.IO) {
             buildTopSequenceItems(
                 sourceVideoUri = sourceVideoUri,
                 sourceStartMs = sourceStartMs,
@@ -240,7 +256,7 @@ class SplitScreenVideoExporter(private val context: Context) {
                 recordedSegments = recordedSegments,
                 allowFreezeFrames = allowFreezeFrames,
                 outWidth = outWidth,
-                topHeight = topHeight,
+                topHeight = sourceCanvasHeight,
                 framing = framing,
                 tempFiles = tempFiles
             )
@@ -249,53 +265,109 @@ class SplitScreenVideoExporter(private val context: Context) {
         return withContext(Dispatchers.Main) {
             suspendCancellableCoroutine { continuation ->
                 val mainHandler = Handler(Looper.getMainLooper())
-
                 val reactionItem = MediaItem.fromUri(reactionVideoUri)
-                val bottomTransformation = UndistortedQuadrantTransformation(
-                    outWidth = outWidth,
-                    outHeight = bottomHeight,
-                    fitInside = false,
-                    userScale = 1f,
-                    offsetXFraction = 0f,
-                    offsetYFraction = 0f,
-                    mirrorHorizontal = mirrorBottomCamera
-                )
-                val bottomEdited = EditedMediaItem.Builder(reactionItem)
-                    .setEffects(Effects(emptyList(), listOf(bottomTransformation)))
-                    .build()
 
-                val topSequence = EditedMediaItemSequence(topItems)
-                val bottomSequence = EditedMediaItemSequence(bottomEdited)
+                val composition = if (isSplitMode) {
+                    val bottomTransformation = UndistortedQuadrantTransformation(
+                        outWidth = outWidth,
+                        outHeight = bottomHeight,
+                        fitInside = false,
+                        userScale = 1f,
+                        offsetXFraction = 0f,
+                        offsetYFraction = 0f,
+                        mirrorHorizontal = mirrorBottomCamera
+                    )
+                    val bottomEdited = EditedMediaItem.Builder(reactionItem)
+                        .setEffects(Effects(emptyList(), listOf(bottomTransformation)))
+                        .build()
 
-                // Each input is rendered at its exact quadrant pixel height (topHeight + bottomHeight == outHeight).
-                // Scale (1f, 1f) aligns top [0..topHeight] and bottom [topHeight..outHeight] seamlessly.
-                val compositorSettings = object : VideoCompositorSettings {
-                    override fun getOutputSize(inputSizes: MutableList<Size>): Size {
-                        return Size(outWidth, outHeight)
-                    }
+                    val topSequence = EditedMediaItemSequence(sourceItems)
+                    val bottomSequence = EditedMediaItemSequence(bottomEdited)
 
-                    override fun getOverlaySettings(
-                        inputId: Int,
-                        presentationTimeUs: Long
-                    ): OverlaySettings {
-                        return when (inputId) {
-                            0 -> OverlaySettings.Builder()
-                                .setOverlayFrameAnchor(0f, 1f)
-                                .setBackgroundFrameAnchor(0f, 1f)
-                                .setScale(1f, 1f)
-                                .build()
-                            else -> OverlaySettings.Builder()
-                                .setOverlayFrameAnchor(0f, -1f)
-                                .setBackgroundFrameAnchor(0f, -1f)
-                                .setScale(1f, 1f)
-                                .build()
+                    val compositorSettings = object : VideoCompositorSettings {
+                        override fun getOutputSize(inputSizes: MutableList<Size>): Size {
+                            return Size(outWidth, outHeight)
+                        }
+
+                        override fun getOverlaySettings(
+                            inputId: Int,
+                            presentationTimeUs: Long
+                        ): OverlaySettings {
+                            return when (inputId) {
+                                0 -> OverlaySettings.Builder()
+                                    .setOverlayFrameAnchor(0f, 1f)
+                                    .setBackgroundFrameAnchor(0f, 1f)
+                                    .setScale(1f, 1f)
+                                    .build()
+                                else -> OverlaySettings.Builder()
+                                    .setOverlayFrameAnchor(0f, -1f)
+                                    .setBackgroundFrameAnchor(0f, -1f)
+                                    .setScale(1f, 1f)
+                                    .build()
+                            }
                         }
                     }
-                }
 
-                val composition = Composition.Builder(topSequence, bottomSequence)
-                    .setVideoCompositorSettings(compositorSettings)
-                    .build()
+                    Composition.Builder(topSequence, bottomSequence)
+                        .setVideoCompositorSettings(compositorSettings)
+                        .build()
+                } else {
+                    // Full-screen 9:16 background video + draggable PiP (Square / Circle / Person Cutout)
+                    val pipWidthPx = (((outWidth * pipOverlay.widthFraction.coerceIn(0.22f, 0.72f)).toInt()) / 2) * 2
+                    val pipHeightPx = (((pipWidthPx * pipOverlay.heightToWidthRatio(layoutMode)).toInt().coerceAtMost(900)) / 2) * 2
+
+                    val cameraCropTransform = UndistortedQuadrantTransformation(
+                        outWidth = pipWidthPx.coerceAtLeast(120),
+                        outHeight = pipHeightPx.coerceAtLeast(120),
+                        fitInside = false,
+                        userScale = 1f,
+                        offsetXFraction = 0f,
+                        offsetYFraction = 0f,
+                        mirrorHorizontal = mirrorBottomCamera
+                    )
+                    val maskEffect = PipCameraMaskEffect(layoutMode = layoutMode)
+
+                    val foregroundCameraEdited = EditedMediaItem.Builder(reactionItem)
+                        .setEffects(Effects(emptyList(), listOf(cameraCropTransform, maskEffect)))
+                        .build()
+
+                    // CRITICAL Media3 DefaultVideoCompositor order:
+                    // inputId == 0 (FIRST sequence) is drawn ON TOP (foreground PiP/Cutout camera)
+                    // inputId == 1 (SECOND sequence) is drawn BEHIND (full-screen 9:16 video)
+                    val foregroundCameraSequence = EditedMediaItemSequence(foregroundCameraEdited)
+                    val backgroundVideoSequence = EditedMediaItemSequence(sourceItems)
+
+                    val ndcX = (pipOverlay.centerXFraction * 2f - 1f).coerceIn(-0.92f, 0.92f)
+                    val ndcY = (1f - pipOverlay.centerYFraction * 2f).coerceIn(-0.92f, 0.92f)
+
+                    val pipCompositorSettings = object : VideoCompositorSettings {
+                        override fun getOutputSize(inputSizes: MutableList<Size>): Size {
+                            return Size(outWidth, outHeight)
+                        }
+
+                        override fun getOverlaySettings(
+                            inputId: Int,
+                            presentationTimeUs: Long
+                        ): OverlaySettings {
+                            return when (inputId) {
+                                0 -> OverlaySettings.Builder()
+                                    .setOverlayFrameAnchor(0f, 0f)
+                                    .setBackgroundFrameAnchor(ndcX, ndcY)
+                                    .setScale(1f, 1f)
+                                    .build()
+                                else -> OverlaySettings.Builder()
+                                    .setOverlayFrameAnchor(0f, 0f)
+                                    .setBackgroundFrameAnchor(0f, 0f)
+                                    .setScale(1f, 1f)
+                                    .build()
+                            }
+                        }
+                    }
+
+                    Composition.Builder(foregroundCameraSequence, backgroundVideoSequence)
+                        .setVideoCompositorSettings(pipCompositorSettings)
+                        .build()
+                }
 
                 val progressHolder = ProgressHolder()
                 var progressRunnable: Runnable? = null

@@ -24,6 +24,8 @@ import com.example.model.AudioSettingsState
 import com.example.model.AutoReactMode
 import com.example.model.ExportStatus
 import com.example.model.HeadphoneEqProfile
+import com.example.model.PipCameraOverlayState
+import com.example.model.ReactLayoutMode
 import com.example.model.ReactionMarker
 import com.example.model.RecordedTake
 import com.example.model.SourcePlaybackSegment
@@ -109,11 +111,13 @@ class ReactStudioViewModel(application: Application) : AndroidViewModel(applicat
         viewModelScope.launch {
             val savedAudio = prefsRepo.audioSettingsFlow.first()
             val savedSplit = prefsRepo.splitRatioFlow.first()
+            val savedLayout = prefsRepo.layoutModeFlow.first()
             audioEngine.updateSettings(savedAudio)
             _uiState.update {
                 it.copy(
                     audioSettings = savedAudio,
-                    splitRatio = savedSplit
+                    splitRatio = savedSplit,
+                    layoutMode = savedLayout
                 )
             }
         }
@@ -461,12 +465,76 @@ class ReactStudioViewModel(application: Application) : AndroidViewModel(applicat
         }
     }
 
-    // --- Split Layout & Camera ---
+    // --- Split Layout, Full-Screen 9:16 PiP & Camera ---
 
     fun cycleSplitRatio() {
         val next = _uiState.value.splitRatio.next()
         _uiState.update { it.copy(splitRatio = next) }
         viewModelScope.launch { prefsRepo.saveSplitRatio(next) }
+    }
+
+    fun setLayoutMode(mode: ReactLayoutMode) {
+        val current = _uiState.value
+        if (current.layoutMode == mode) return
+        if (current.isRecording) {
+            showStatusToast("Finalize a gravação atual para trocar o formato do layout.")
+            return
+        }
+        val adjustedPip = if (mode == ReactLayoutMode.PIP_CUTOUT && current.pipOverlay.widthFraction < 0.40f) {
+            current.pipOverlay.copy(widthFraction = 0.44f)
+        } else if (mode != ReactLayoutMode.PIP_CUTOUT && current.pipOverlay.widthFraction > 0.48f) {
+            current.pipOverlay.copy(widthFraction = 0.36f)
+        } else {
+            current.pipOverlay
+        }
+        val hintToast = when (mode) {
+            ReactLayoutMode.SPLIT_SCREEN -> "Modo Tela Dividida ativado"
+            ReactLayoutMode.PIP_SQUARE -> "Fundo 9:16 + Câmera Quadrada · Arraste ou pince sua câmera"
+            ReactLayoutMode.PIP_CIRCLE -> "Fundo 9:16 + Câmera Redonda · Arraste ou pince sua câmera"
+            ReactLayoutMode.PIP_CUTOUT -> "Recorte de fundo ativado · Arraste ou pince sua silhueta"
+        }
+        _uiState.update {
+            it.copy(
+                layoutMode = mode,
+                pipOverlay = adjustedPip,
+                isFramingMode = false,
+                statusToast = hintToast
+            )
+        }
+        viewModelScope.launch { prefsRepo.saveLayoutMode(mode) }
+    }
+
+    fun updatePipOverlayTransform(
+        deltaXFraction: Float,
+        deltaYFraction: Float,
+        zoomFactor: Float
+    ) {
+        _uiState.update { state ->
+            val current = state.pipOverlay
+            val newWidth = (current.widthFraction * zoomFactor).coerceIn(0.22f, 0.70f)
+            val newCenterX = (current.centerXFraction + deltaXFraction).coerceIn(0.10f, 0.90f)
+            val newCenterY = (current.centerYFraction + deltaYFraction).coerceIn(0.12f, 0.84f)
+            state.copy(
+                pipOverlay = current.copy(
+                    centerXFraction = newCenterX,
+                    centerYFraction = newCenterY,
+                    widthFraction = newWidth
+                )
+            )
+        }
+    }
+
+    fun resetPipOverlay() {
+        _uiState.update { state ->
+            val defaultWidth = if (state.layoutMode == ReactLayoutMode.PIP_CUTOUT) 0.44f else 0.36f
+            state.copy(
+                pipOverlay = PipCameraOverlayState(
+                    centerXFraction = 0.74f,
+                    centerYFraction = 0.56f,
+                    widthFraction = defaultWidth
+                )
+            )
+        }
     }
 
     fun toggleCameraLens() {
@@ -756,6 +824,8 @@ class ReactStudioViewModel(application: Application) : AndroidViewModel(applicat
                 recordedSegments = segmentsSnapshot,
                 isSourceMuted = state.isVideoMuted,
                 splitRatio = state.splitRatio,
+                layoutMode = state.layoutMode,
+                pipOverlay = state.pipOverlay,
                 framing = state.framing,
                 mirrorBottomCamera = state.isFrontCamera && state.isCameraMirrored,
                 onProgress = { progress ->

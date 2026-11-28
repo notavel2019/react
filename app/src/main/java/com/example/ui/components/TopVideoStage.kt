@@ -84,6 +84,7 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.media3.exoplayer.ExoPlayer
@@ -119,6 +120,7 @@ fun TopVideoStage(
     onSelectAspectPreset: (VideoAspectPreset) -> Unit,
     onToggleGrid: () -> Unit,
     onResetFraming: () -> Unit,
+    bottomOverlayPadding: Dp = 0.dp,
     modifier: Modifier = Modifier
 ) {
     val isInstagramEmbed = uiState.sourceVideoType == VideoSourceType.INSTAGRAM_EMBED
@@ -132,6 +134,8 @@ fun TopVideoStage(
         if (uiState.sourceVideoUri == null) {
             EmptyVideoStage(
                 subscription = uiState.subscription,
+                isFullScreenOverlay = uiState.isFullScreenOverlayMode,
+                bottomOverlayPadding = bottomOverlayPadding,
                 onPickVideo = onPickVideo,
                 onOpenUrlDialog = onOpenUrlDialog,
                 onOpenSubscription = onOpenSubscription
@@ -306,7 +310,9 @@ fun TopVideoStage(
                 visible = uiState.isFramingMode,
                 enter = fadeIn(),
                 exit = fadeOut(),
-                modifier = Modifier.align(Alignment.BottomCenter)
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(bottom = bottomOverlayPadding)
             ) {
                 FramingControlsOverlay(
                     uiState = uiState,
@@ -321,7 +327,9 @@ fun TopVideoStage(
                 visible = !uiState.isFramingMode && !isInstagramEmbed,
                 enter = fadeIn(),
                 exit = fadeOut(),
-                modifier = Modifier.align(Alignment.BottomCenter)
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(bottom = bottomOverlayPadding)
             ) {
                 PlaybackTransportBar(
                     uiState = uiState,
@@ -900,6 +908,8 @@ private fun PlaybackTransportBar(
 @Composable
 private fun EmptyVideoStage(
     subscription: SubscriptionUiState,
+    isFullScreenOverlay: Boolean,
+    bottomOverlayPadding: Dp,
     onPickVideo: () -> Unit,
     onOpenUrlDialog: () -> Unit,
     onOpenSubscription: () -> Unit
@@ -939,12 +949,21 @@ private fun EmptyVideoStage(
             modifier = Modifier
                 .fillMaxSize()
                 .statusBarsPadding()
-                .padding(horizontal = 24.dp, vertical = 16.dp),
+                .padding(
+                    start = 24.dp,
+                    end = 24.dp,
+                    top = 16.dp,
+                    bottom = 16.dp + bottomOverlayPadding
+                ),
             verticalArrangement = Arrangement.Center,
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             StudioStatusPill(
-                text = "PALCO SUPERIOR · VÍDEO / REELS",
+                text = if (isFullScreenOverlay) {
+                    "FUNDO 9:16 · VÍDEO / REELS"
+                } else {
+                    "PALCO SUPERIOR · VÍDEO / REELS"
+                },
                 dotColor = ElectricCyan
             )
             Spacer(modifier = Modifier.height(12.dp))

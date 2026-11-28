@@ -14,3 +14,7 @@
 
 # CameraX camera2 interop
 -keep class androidx.camera.camera2.** { *; }
+
+# ML Kit Selfie Segmentation (on-device person cutout)
+-keep class com.google.mlkit.** { *; }
+-dontwarn com.google.mlkit.**

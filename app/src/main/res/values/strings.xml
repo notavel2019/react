@@ -37,6 +37,14 @@
     <string name="cd_audio_settings">Abrir painel de áudio e fone</string>
     <string name="cd_framing_settings">Ajustar enquadramento do vídeo</string>
     <string name="cd_split_ratio">Alterar divisão da tela</string>
+    <string name="cd_layout_mode">Alterar modo de layout do react</string>
+    <string name="cd_reset_pip">Centralizar janela da câmera</string>
+    <string name="layout_split">Dividida</string>
+    <string name="layout_pip_square">Quadrado</string>
+    <string name="layout_pip_circle">Redondo</string>
+    <string name="layout_pip_cutout">Recorte</string>
+    <string name="pip_drag_hint">Arraste ou pince sua câmera</string>
+    <string name="pip_cutout_warming">Recortando fundo...</string>
     <string name="cd_app_updates">Verificar atualizações do aplicativo</string>
     <string name="cd_close">Fechar</string>
 

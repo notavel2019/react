@@ -12,6 +12,7 @@ import androidx.datastore.preferences.preferencesDataStore
 import com.example.model.AudioSettingsState
 import com.example.model.AutoReactMode
 import com.example.model.HeadphoneEqProfile
+import com.example.model.ReactLayoutMode
 import com.example.model.SplitRatioPreset
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
@@ -45,6 +46,7 @@ class AudioPreferencesRepository(private val context: Context) {
         val MIX_BALANCE = floatPreferencesKey("mix_balance")
         val EQ_PROFILE = stringPreferencesKey("eq_profile")
         val SPLIT_RATIO = stringPreferencesKey("split_ratio")
+        val LAYOUT_MODE = stringPreferencesKey("react_layout_mode")
         val TRIAL_STARTED_AT_MS = longPreferencesKey("trial_started_at_ms")
         val TRIAL_INTEGRITY_SIG = stringPreferencesKey("trial_integrity_sig")
         val TRIAL_LAST_SEEN_MS = longPreferencesKey("trial_last_seen_ms")
@@ -76,6 +78,11 @@ class AudioPreferencesRepository(private val context: Context) {
     val splitRatioFlow: Flow<SplitRatioPreset> = context.studioDataStore.data.map { prefs ->
         val splitName = prefs[Keys.SPLIT_RATIO]
         SplitRatioPreset.entries.firstOrNull { it.name == splitName } ?: SplitRatioPreset.BALANCED
+    }
+
+    val layoutModeFlow: Flow<ReactLayoutMode> = context.studioDataStore.data.map { prefs ->
+        val modeName = prefs[Keys.LAYOUT_MODE]
+        ReactLayoutMode.entries.firstOrNull { it.name == modeName } ?: ReactLayoutMode.SPLIT_SCREEN
     }
 
     suspend fun readTrialRecord(): StoredTrialRecord {
@@ -117,6 +124,12 @@ class AudioPreferencesRepository(private val context: Context) {
     suspend fun saveSplitRatio(preset: SplitRatioPreset) {
         context.studioDataStore.edit { prefs ->
             prefs[Keys.SPLIT_RATIO] = preset.name
+        }
+    }
+
+    suspend fun saveLayoutMode(mode: ReactLayoutMode) {
+        context.studioDataStore.edit { prefs ->
+            prefs[Keys.LAYOUT_MODE] = mode.name
         }
     }
 }

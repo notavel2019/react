@@ -27,6 +27,24 @@ enum class SplitRatioPreset(val topWeight: Float, val label: String) {
     }
 }
 
+enum class ReactLayoutMode(val label: String, val exportLabel: String) {
+    SPLIT_SCREEN("Dividida", "Tela Dividida 9:16"),
+    PIP_SQUARE("Quadrado", "Fundo 9:16 + Quadrado"),
+    PIP_CIRCLE("Redondo", "Fundo 9:16 + Redondo"),
+    PIP_CUTOUT("Recorte", "Fundo 9:16 + Recorte de Fundo")
+}
+
+data class PipCameraOverlayState(
+    val centerXFraction: Float = 0.74f,
+    val centerYFraction: Float = 0.56f,
+    val widthFraction: Float = 0.36f
+) {
+    fun heightToWidthRatio(mode: ReactLayoutMode): Float = when (mode) {
+        ReactLayoutMode.PIP_CUTOUT -> 1.34f
+        else -> 1.0f
+    }
+}
+
 enum class AutoReactMode(val title: String, val subtitle: String) {
     DUCK_VIDEO(
         title = "Abaixar vídeo (Auto-Duck)",
@@ -195,6 +213,8 @@ data class StudioUiState(
     val isFramingMode: Boolean = false,
     val framing: VideoFramingState = VideoFramingState(),
     val splitRatio: SplitRatioPreset = SplitRatioPreset.BALANCED,
+    val layoutMode: ReactLayoutMode = ReactLayoutMode.SPLIT_SCREEN,
+    val pipOverlay: PipCameraOverlayState = PipCameraOverlayState(),
     val isFrontCamera: Boolean = true,
     val isCameraMirrored: Boolean = true,
     val cameraZoomRatio: Float = 1.0f,
@@ -225,6 +245,9 @@ data class StudioUiState(
     val activeAudioTab: AudioPanelTab = AudioPanelTab.MICROPHONE,
     val statusToast: String? = null
 ) {
+    val isFullScreenOverlayMode: Boolean
+        get() = layoutMode != ReactLayoutMode.SPLIT_SCREEN
+
     val isReactingNow: Boolean
         get() = isManualReacting || (audioSettings.autoReactEnabled && isSpeaking)
 

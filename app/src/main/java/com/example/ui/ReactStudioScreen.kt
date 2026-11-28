@@ -24,6 +24,7 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -34,6 +35,7 @@ import androidx.compose.material.icons.rounded.BookmarkAdd
 import androidx.compose.material.icons.rounded.Headphones
 import androidx.compose.material.icons.rounded.Splitscreen
 import androidx.compose.material.icons.rounded.Tune
+import androidx.compose.material.icons.rounded.VolumeUp
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Snackbar
@@ -51,6 +53,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
@@ -69,17 +73,25 @@ import androidx.media3.exoplayer.ExoPlayer
 import com.example.R
 import com.example.model.ActiveSheet
 import com.example.model.AudioPanelTab
+import com.example.model.ReactLayoutMode
 import com.example.model.StudioUiState
 import com.example.model.VideoSourceType
 import com.example.ui.components.AudioConsoleContent
 import com.example.ui.components.AudioConsoleModalSheet
 import com.example.ui.components.BottomCameraStage
 import com.example.ui.components.ExportShareModalSheet
+import com.example.ui.components.FloatingPipCameraOverlay
+import com.example.ui.components.LayoutModeSelectorBar
+import com.example.ui.components.MiniMicBars
+import com.example.ui.components.StudioControlDock
+import com.example.ui.components.StudioStatusPill
 import com.example.ui.components.SubscriptionModalSheet
 import com.example.ui.components.SubscriptionPaywallOverlay
 import com.example.ui.components.TakesHistoryModalSheet
 import com.example.ui.components.TopVideoStage
 import com.example.ui.components.VideoUrlDialog
+import com.example.ui.components.formatTimecode
+import com.example.ui.components.rememberCameraStudioController
 import com.example.ui.theme.CoralCrimson
 import com.example.ui.theme.ElectricCyan
 import com.example.ui.theme.SignalAmber
@@ -301,6 +313,52 @@ fun ReactStudioScreen(
         viewModel.clearStatusToast()
     }
 
+    // Shared CameraX Preview + VideoCapture + ML Kit Cutout controller across ALL 4 layout modes
+    val cameraController = rememberCameraStudioController(
+        hasCameraPermission = hasCameraPermission,
+        hasAudioPermission = hasAudioPermission,
+        isFrontCamera = uiState.isFrontCamera,
+        isCameraMirrored = uiState.isCameraMirrored,
+        enableCutout = uiState.layoutMode == ReactLayoutMode.PIP_CUTOUT,
+        onRequestPermissions = ::requestStudioPermissions,
+        onBeforeRecordingStart = viewModel::prepareForCameraRecording,
+        onRecordingStarted = {
+            val hasExoVideo = uiState.sourceVideoUri != null &&
+                uiState.sourceVideoType != VideoSourceType.INSTAGRAM_EMBED
+            if (hasExoVideo) {
+                if (exoPlayer.playbackState == Player.STATE_IDLE) {
+                    exoPlayer.prepare()
+                } else if (exoPlayer.playbackState == Player.STATE_ENDED) {
+                    exoPlayer.seekTo(0L)
+                }
+                if (!exoPlayer.isPlaying) {
+                    exoPlayer.play()
+                }
+            }
+            viewModel.onRecordingStarted(
+                exactSourcePositionMs = exoPlayer.currentPosition.coerceAtLeast(0L),
+                isSourcePlaying = if (hasExoVideo) true else exoPlayer.isPlaying
+            )
+        },
+        onRecordingStatus = { recordedMs, amplitude ->
+            val activePlayback = exoPlayer.isPlaying ||
+                (exoPlayer.playWhenReady && exoPlayer.playbackState == Player.STATE_BUFFERING)
+            viewModel.onRecordingStatusTick(
+                recordedDurationMs = recordedMs,
+                audioAmplitude = amplitude,
+                liveSourcePositionMs = exoPlayer.currentPosition.coerceAtLeast(0L),
+                isSourcePlaying = activePlayback
+            )
+        },
+        onRecordingFinalized = { uri, err ->
+            viewModel.onRecordingFinalized(
+                savedUri = uri,
+                errorMessage = err,
+                resumeAudioMonitor = hasAudioPermission
+            )
+        }
+    )
+
     BackHandler(enabled = uiState.isFramingMode || uiState.activeSheet != ActiveSheet.NONE) {
         if (uiState.activeSheet != ActiveSheet.NONE) {
             viewModel.closeSheet()
@@ -323,94 +381,245 @@ fun ReactStudioScreen(
         )
 
         Row(modifier = Modifier.fillMaxSize()) {
-            Column(
-                modifier = Modifier
-                    .weight(1f)
-                    .fillMaxHeight()
-            ) {
-                TopVideoStage(
-                    uiState = uiState,
-                    exoPlayer = exoPlayer,
-                    onPickVideo = ::launchVideoPicker,
-                    onOpenUrlDialog = { viewModel.openSheet(ActiveSheet.VIDEO_URL_DIALOG) },
-                    onOpenSubscription = { viewModel.openSheet(ActiveSheet.SUBSCRIPTION) },
-                    onTogglePlayPause = viewModel::togglePlayPause,
-                    onRewind = { viewModel.seekBy(-5_000L) },
-                    onForward = { viewModel.seekBy(5_000L) },
-                    onSeekTo = viewModel::seekTo,
-                    onCycleSpeed = viewModel::cyclePlaybackSpeed,
-                    onToggleMute = viewModel::toggleVideoMute,
-                    onToggleFramingMode = viewModel::setFramingMode,
-                    onFramingGesture = viewModel::updateFramingTransform,
-                    onFramingScaleChange = viewModel::setFramingScale,
-                    onSelectAspectPreset = viewModel::setAspectPreset,
-                    onToggleGrid = viewModel::toggleRuleOfThirds,
-                    onResetFraming = viewModel::resetFraming,
-                    modifier = Modifier.weight(topWeight)
-                )
+            if (!uiState.isFullScreenOverlayMode) {
+                // Classic Split-Screen Studio (Top Video + Divider/Layout Switcher + Bottom Camera)
+                Column(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxHeight()
+                ) {
+                    TopVideoStage(
+                        uiState = uiState,
+                        exoPlayer = exoPlayer,
+                        onPickVideo = ::launchVideoPicker,
+                        onOpenUrlDialog = { viewModel.openSheet(ActiveSheet.VIDEO_URL_DIALOG) },
+                        onOpenSubscription = { viewModel.openSheet(ActiveSheet.SUBSCRIPTION) },
+                        onTogglePlayPause = viewModel::togglePlayPause,
+                        onRewind = { viewModel.seekBy(-5_000L) },
+                        onForward = { viewModel.seekBy(5_000L) },
+                        onSeekTo = viewModel::seekTo,
+                        onCycleSpeed = viewModel::cyclePlaybackSpeed,
+                        onToggleMute = viewModel::toggleVideoMute,
+                        onToggleFramingMode = viewModel::setFramingMode,
+                        onFramingGesture = viewModel::updateFramingTransform,
+                        onFramingScaleChange = viewModel::setFramingScale,
+                        onSelectAspectPreset = viewModel::setAspectPreset,
+                        onToggleGrid = viewModel::toggleRuleOfThirds,
+                        onResetFraming = viewModel::resetFraming,
+                        modifier = Modifier.weight(topWeight)
+                    )
 
-                StudioSplitDividerBar(
-                    uiState = uiState,
-                    showAudioShortcut = !isWideScreen,
-                    onCycleSplit = viewModel::cycleSplitRatio,
-                    onMarkReaction = { viewModel.addReactionMarker(isAuto = false) },
-                    onOpenAudioHeadphones = {
-                        viewModel.openSheet(ActiveSheet.AUDIO_CONSOLE, AudioPanelTab.HEADPHONES)
+                    StudioSplitDividerBar(
+                        uiState = uiState,
+                        showAudioShortcut = !isWideScreen,
+                        onCycleSplit = viewModel::cycleSplitRatio,
+                        onSelectLayoutMode = viewModel::setLayoutMode,
+                        onMarkReaction = { viewModel.addReactionMarker(isAuto = false) },
+                        onOpenAudioHeadphones = {
+                            viewModel.openSheet(ActiveSheet.AUDIO_CONSOLE, AudioPanelTab.HEADPHONES)
+                        }
+                    )
+
+                    BottomCameraStage(
+                        uiState = uiState,
+                        cameraController = cameraController,
+                        hasCameraPermission = hasCameraPermission,
+                        onRequestPermissions = ::requestStudioPermissions,
+                        onToggleCameraLens = viewModel::toggleCameraLens,
+                        onToggleMirror = viewModel::toggleCameraMirror,
+                        onToggleManualReact = viewModel::toggleManualReaction,
+                        onOpenAudioPanel = {
+                            if (!isWideScreen) {
+                                viewModel.openSheet(ActiveSheet.AUDIO_CONSOLE)
+                            }
+                        },
+                        onOpenTakesPanel = { viewModel.openSheet(ActiveSheet.TAKES_HISTORY) },
+                        modifier = Modifier.weight(1f - topWeight)
+                    )
+                }
+            } else {
+                // Full-Screen 9:16 Background Video + Draggable PiP (Square / Circle / AI Cutout)
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxHeight()
+                ) {
+                    // Layer 1: Full-screen 9:16 video background
+                    TopVideoStage(
+                        uiState = uiState,
+                        exoPlayer = exoPlayer,
+                        onPickVideo = ::launchVideoPicker,
+                        onOpenUrlDialog = { viewModel.openSheet(ActiveSheet.VIDEO_URL_DIALOG) },
+                        onOpenSubscription = { viewModel.openSheet(ActiveSheet.SUBSCRIPTION) },
+                        onTogglePlayPause = viewModel::togglePlayPause,
+                        onRewind = { viewModel.seekBy(-5_000L) },
+                        onForward = { viewModel.seekBy(5_000L) },
+                        onSeekTo = viewModel::seekTo,
+                        onCycleSpeed = viewModel::cyclePlaybackSpeed,
+                        onToggleMute = viewModel::toggleVideoMute,
+                        onToggleFramingMode = viewModel::setFramingMode,
+                        onFramingGesture = viewModel::updateFramingTransform,
+                        onFramingScaleChange = viewModel::setFramingScale,
+                        onSelectAspectPreset = viewModel::setAspectPreset,
+                        onToggleGrid = viewModel::toggleRuleOfThirds,
+                        onResetFraming = viewModel::resetFraming,
+                        bottomOverlayPadding = 166.dp,
+                        modifier = Modifier.fillMaxSize()
+                    )
+
+                    // Layer 2: Draggable & Pinch-Resizable PiP Camera (Square / Circle / Cutout)
+                    FloatingPipCameraOverlay(
+                        uiState = uiState,
+                        cameraController = cameraController,
+                        hasCameraPermission = hasCameraPermission,
+                        onRequestPermissions = ::requestStudioPermissions,
+                        onTransformPip = viewModel::updatePipOverlayTransform,
+                        onToggleCameraLens = viewModel::toggleCameraLens,
+                        onToggleMirror = viewModel::toggleCameraMirror,
+                        onResetPip = viewModel::resetPipOverlay,
+                        modifier = Modifier.fillMaxSize()
+                    )
+
+                    // Layer 3: Floating Studio HUD + Layout Mode Switcher + Bottom Control Dock
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .align(Alignment.BottomCenter)
+                            .background(
+                                Brush.verticalGradient(
+                                    colors = listOf(Color.Transparent, Color(0xB8080A10), Color(0xF5080A10))
+                                )
+                            ),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        // Compact status + Audio VU + Mark row
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 12.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            ) {
+                                if (uiState.isRecording) {
+                                    StudioStatusPill(
+                                        text = "REC ${formatTimecode(uiState.recordingElapsedMs)}",
+                                        dotColor = CoralCrimson,
+                                        containerColor = Color(0xD910141E),
+                                        borderColor = CoralCrimson
+                                    )
+                                } else if (uiState.isReactingNow) {
+                                    StudioStatusPill(
+                                        text = stringResource(R.string.studio_reacting_badge),
+                                        dotColor = CoralCrimson,
+                                        containerColor = Color(0xD942101C),
+                                        borderColor = CoralCrimson
+                                    )
+                                }
+
+                                if (uiState.sourceVideoUri != null) {
+                                    Surface(
+                                        onClick = { viewModel.addReactionMarker(isAuto = false) },
+                                        shape = RoundedCornerShape(50),
+                                        color = Color(0xCC171D2B),
+                                        modifier = Modifier.testTag("pip_mark_reaction_button")
+                                    ) {
+                                        Row(
+                                            modifier = Modifier.padding(horizontal = 9.dp, vertical = 5.dp),
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Rounded.BookmarkAdd,
+                                                contentDescription = stringResource(R.string.cd_mark_reaction),
+                                                tint = CoralCrimson,
+                                                modifier = Modifier.size(14.dp)
+                                            )
+                                            Text(
+                                                text = if (uiState.reactionMarkers.isEmpty()) {
+                                                    "Marcar"
+                                                } else {
+                                                    "Marcar (${uiState.reactionMarkers.size})"
+                                                },
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = MaterialTheme.colorScheme.onSurface
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+
+                            // Mini VU + Audio shortcut pill
+                            Surface(
+                                onClick = {
+                                    if (!isWideScreen) {
+                                        viewModel.openSheet(ActiveSheet.AUDIO_CONSOLE)
+                                    }
+                                },
+                                shape = RoundedCornerShape(50),
+                                color = Color(0xCC10141E),
+                                modifier = Modifier
+                                    .border(
+                                        1.dp,
+                                        if (uiState.hasHeadphonesConnected) {
+                                            ElectricCyan.copy(alpha = 0.5f)
+                                        } else {
+                                            SignalAmber.copy(alpha = 0.5f)
+                                        },
+                                        RoundedCornerShape(50)
+                                    )
+                                    .testTag("pip_audio_hud_pill")
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 9.dp, vertical = 5.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                ) {
+                                    MiniMicBars(
+                                        levels = uiState.waveformBars,
+                                        isSpeaking = uiState.isSpeaking,
+                                        modifier = Modifier.width(30.dp)
+                                    )
+                                    Icon(
+                                        imageVector = if (uiState.hasHeadphonesConnected) {
+                                            Icons.Rounded.Headphones
+                                        } else {
+                                            Icons.Rounded.VolumeUp
+                                        },
+                                        contentDescription = stringResource(R.string.cd_audio_settings),
+                                        tint = if (uiState.hasHeadphonesConnected) ElectricCyan else SignalAmber,
+                                        modifier = Modifier.size(15.dp)
+                                    )
+                                }
+                            }
+                        }
+
+                        // 4-Mode Layout Switcher Pill (Dividida · Quadrado · Redondo · Recorte)
+                        LayoutModeSelectorBar(
+                            selectedMode = uiState.layoutMode,
+                            onSelectMode = viewModel::setLayoutMode,
+                            modifier = Modifier.padding(horizontal = 10.dp)
+                        )
+
+                        // Shared Studio Control Dock
+                        StudioControlDock(
+                            uiState = uiState,
+                            hasCameraPermission = hasCameraPermission,
+                            onOpenAudioPanel = {
+                                if (!isWideScreen) {
+                                    viewModel.openSheet(ActiveSheet.AUDIO_CONSOLE)
+                                }
+                            },
+                            onToggleManualReact = viewModel::toggleManualReaction,
+                            onRecordClick = cameraController.onToggleRecording,
+                            onOpenTakesPanel = { viewModel.openSheet(ActiveSheet.TAKES_HISTORY) }
+                        )
                     }
-                )
-
-                BottomCameraStage(
-                    uiState = uiState,
-                    hasCameraPermission = hasCameraPermission,
-                    hasAudioPermission = hasAudioPermission,
-                    onRequestPermissions = ::requestStudioPermissions,
-                    onToggleCameraLens = viewModel::toggleCameraLens,
-                    onToggleMirror = viewModel::toggleCameraMirror,
-                    onToggleManualReact = viewModel::toggleManualReaction,
-                    onOpenAudioPanel = {
-                        if (!isWideScreen) {
-                            viewModel.openSheet(ActiveSheet.AUDIO_CONSOLE)
-                        }
-                    },
-                    onOpenTakesPanel = { viewModel.openSheet(ActiveSheet.TAKES_HISTORY) },
-                    onBeforeRecordingStart = viewModel::prepareForCameraRecording,
-                    onRecordingStarted = {
-                        val hasExoVideo = uiState.sourceVideoUri != null &&
-                            uiState.sourceVideoType != VideoSourceType.INSTAGRAM_EMBED
-                        if (hasExoVideo) {
-                            if (exoPlayer.playbackState == Player.STATE_IDLE) {
-                                exoPlayer.prepare()
-                            } else if (exoPlayer.playbackState == Player.STATE_ENDED) {
-                                exoPlayer.seekTo(0L)
-                            }
-                            if (!exoPlayer.isPlaying) {
-                                exoPlayer.play()
-                            }
-                        }
-                        viewModel.onRecordingStarted(
-                            exactSourcePositionMs = exoPlayer.currentPosition.coerceAtLeast(0L),
-                            isSourcePlaying = if (hasExoVideo) true else exoPlayer.isPlaying
-                        )
-                    },
-                    onRecordingStatus = { recordedMs, amplitude ->
-                        val activePlayback = exoPlayer.isPlaying ||
-                            (exoPlayer.playWhenReady && exoPlayer.playbackState == Player.STATE_BUFFERING)
-                        viewModel.onRecordingStatusTick(
-                            recordedDurationMs = recordedMs,
-                            audioAmplitude = amplitude,
-                            liveSourcePositionMs = exoPlayer.currentPosition.coerceAtLeast(0L),
-                            isSourcePlaying = activePlayback
-                        )
-                    },
-                    onRecordingFinalized = { uri, err ->
-                        viewModel.onRecordingFinalized(
-                            savedUri = uri,
-                            errorMessage = err,
-                            resumeAudioMonitor = hasAudioPermission
-                        )
-                    },
-                    modifier = Modifier.weight(1f - topWeight)
-                )
+                }
             }
 
             if (isWideScreen) {
@@ -540,108 +749,115 @@ private fun StudioSplitDividerBar(
     uiState: StudioUiState,
     showAudioShortcut: Boolean,
     onCycleSplit: () -> Unit,
+    onSelectLayoutMode: (ReactLayoutMode) -> Unit,
     onMarkReaction: () -> Unit,
     onOpenAudioHeadphones: () -> Unit
 ) {
-    Row(
+    Column(
         modifier = Modifier
             .fillMaxWidth()
-            .height(38.dp)
             .background(StudioSurface)
             .border(1.dp, StudioOutlineSubtle)
-            .padding(horizontal = 10.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.SpaceBetween
+            .padding(horizontal = 8.dp, vertical = 5.dp),
+        verticalArrangement = Arrangement.spacedBy(5.dp),
+        horizontalAlignment = Alignment.CenterHorizontally
     ) {
+        // 4-Mode Layout Switcher Strip right at the center of the studio
+        LayoutModeSelectorBar(
+            selectedMode = uiState.layoutMode,
+            onSelectMode = onSelectLayoutMode
+        )
+
         Row(
             modifier = Modifier
-                .clip(RoundedCornerShape(8.dp))
-                .clickable(onClick = onCycleSplit)
-                .padding(horizontal = 8.dp, vertical = 4.dp)
-                .testTag("split_ratio_button"),
+                .fillMaxWidth()
+                .height(30.dp)
+                .padding(horizontal = 4.dp),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(5.dp)
+            horizontalArrangement = Arrangement.SpaceBetween
         ) {
-            Icon(
-                imageVector = Icons.Rounded.Splitscreen,
-                contentDescription = stringResource(R.string.cd_split_ratio),
-                tint = ElectricCyan,
-                modifier = Modifier.size(16.dp)
-            )
-            Text(
-                text = uiState.splitRatio.label,
-                style = StudioMonoStyle,
-                color = MaterialTheme.colorScheme.onSurface
-            )
-        }
-
-        if (uiState.sourceVideoUri != null) {
-            Surface(
-                onClick = onMarkReaction,
-                shape = RoundedCornerShape(50),
-                color = StudioSurfaceElevated,
-                modifier = Modifier.testTag("mark_reaction_button")
-            ) {
-                Row(
-                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(4.dp)
-                ) {
-                    Icon(
-                        imageVector = Icons.Rounded.BookmarkAdd,
-                        contentDescription = stringResource(R.string.cd_mark_reaction),
-                        tint = CoralCrimson,
-                        modifier = Modifier.size(15.dp)
-                    )
-                    Text(
-                        text = if (uiState.reactionMarkers.isEmpty()) {
-                            "Marcar"
-                        } else {
-                            "Marcar (${uiState.reactionMarkers.size})"
-                        },
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurface
-                    )
-                }
-            }
-        } else {
-            Box(
-                modifier = Modifier
-                    .width(36.dp)
-                    .height(4.dp)
-                    .clip(RoundedCornerShape(50))
-                    .background(StudioOutlineSubtle)
-            )
-        }
-
-        if (showAudioShortcut) {
             Row(
                 modifier = Modifier
                     .clip(RoundedCornerShape(8.dp))
-                    .clickable(onClick = onOpenAudioHeadphones)
-                    .padding(horizontal = 8.dp, vertical = 4.dp)
-                    .testTag("divider_audio_button"),
+                    .clickable(onClick = onCycleSplit)
+                    .padding(horizontal = 6.dp, vertical = 3.dp)
+                    .testTag("split_ratio_button"),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(5.dp)
             ) {
                 Icon(
-                    imageVector = if (uiState.hasHeadphonesConnected) Icons.Rounded.Headphones else Icons.Rounded.Tune,
-                    contentDescription = stringResource(R.string.cd_audio_settings),
-                    tint = if (uiState.hasHeadphonesConnected) ElectricCyan else SignalAmber,
-                    modifier = Modifier.size(16.dp)
+                    imageVector = Icons.Rounded.Splitscreen,
+                    contentDescription = stringResource(R.string.cd_split_ratio),
+                    tint = ElectricCyan,
+                    modifier = Modifier.size(15.dp)
                 )
                 Text(
-                    text = if (uiState.hasHeadphonesConnected) "Fone ON" else "Áudio",
+                    text = uiState.splitRatio.label,
                     style = StudioMonoStyle,
-                    color = if (uiState.hasHeadphonesConnected) ElectricCyan else SignalAmber
+                    color = MaterialTheme.colorScheme.onSurface
                 )
             }
-        } else {
-            Text(
-                text = if (uiState.audioSettings.autoReactEnabled) "AUTO-REACT ON" else "MANUAL",
-                style = StudioMonoStyle,
-                color = if (uiState.audioSettings.autoReactEnabled) ElectricCyan else MaterialTheme.colorScheme.onSurfaceVariant
-            )
+
+            if (uiState.sourceVideoUri != null) {
+                Surface(
+                    onClick = onMarkReaction,
+                    shape = RoundedCornerShape(50),
+                    color = StudioSurfaceElevated,
+                    modifier = Modifier.testTag("mark_reaction_button")
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 3.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.BookmarkAdd,
+                            contentDescription = stringResource(R.string.cd_mark_reaction),
+                            tint = CoralCrimson,
+                            modifier = Modifier.size(14.dp)
+                        )
+                        Text(
+                            text = if (uiState.reactionMarkers.isEmpty()) {
+                                "Marcar"
+                            } else {
+                                "Marcar (${uiState.reactionMarkers.size})"
+                            },
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                    }
+                }
+            }
+
+            if (showAudioShortcut) {
+                Row(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(8.dp))
+                        .clickable(onClick = onOpenAudioHeadphones)
+                        .padding(horizontal = 6.dp, vertical = 3.dp)
+                        .testTag("divider_audio_button"),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(5.dp)
+                ) {
+                    Icon(
+                        imageVector = if (uiState.hasHeadphonesConnected) Icons.Rounded.Headphones else Icons.Rounded.Tune,
+                        contentDescription = stringResource(R.string.cd_audio_settings),
+                        tint = if (uiState.hasHeadphonesConnected) ElectricCyan else SignalAmber,
+                        modifier = Modifier.size(15.dp)
+                    )
+                    Text(
+                        text = if (uiState.hasHeadphonesConnected) "Fone ON" else "Áudio",
+                        style = StudioMonoStyle,
+                        color = if (uiState.hasHeadphonesConnected) ElectricCyan else SignalAmber
+                    )
+                }
+            } else {
+                Text(
+                    text = if (uiState.audioSettings.autoReactEnabled) "AUTO-REACT ON" else "MANUAL",
+                    style = StudioMonoStyle,
+                    color = if (uiState.audioSettings.autoReactEnabled) ElectricCyan else MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
         }
     }
 }

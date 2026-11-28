@@ -201,7 +201,7 @@ fun ExportShareModalSheet(
                             text = when (exportStatus) {
                                 is ExportStatus.CombinedReady -> stringResource(R.string.export_combined_ready)
                                 is ExportStatus.Combining -> stringResource(R.string.export_combining)
-                                else -> "Vídeo Combinado (Tela Dividida 9:16)"
+                                else -> "Vídeo Combinado (${uiState.layoutMode.exportLabel})"
                             },
                             style = MaterialTheme.typography.titleSmall,
                             color = MaterialTheme.colorScheme.onSurface
@@ -209,9 +209,13 @@ fun ExportShareModalSheet(
                         Text(
                             text = when (exportStatus) {
                                 is ExportStatus.CombinedReady -> exportStatus.displayName
-                                is ExportStatus.Combining -> "${(exportStatus.progress * 100).toInt()}% · Vídeo superior + Câmera inferior"
+                                is ExportStatus.Combining -> "${(exportStatus.progress * 100).toInt()}% · ${uiState.layoutMode.exportLabel}"
                                 is ExportStatus.Error -> exportStatus.message
-                                else -> "Gera um novo arquivo MP4 na Galeria unindo o vídeo de cima com sua reação de baixo."
+                                else -> if (uiState.isFullScreenOverlayMode) {
+                                    "Gera um novo MP4 9:16 com o vídeo no fundo inteiro e sua câmera sobreposta na posição ajustada."
+                                } else {
+                                    "Gera um novo arquivo MP4 na Galeria unindo o vídeo de cima com sua reação de baixo."
+                                }
                             },
                             style = MaterialTheme.typography.bodySmall,
                             color = if (exportStatus is ExportStatus.Error) CoralCrimson else MaterialTheme.colorScheme.onSurfaceVariant
