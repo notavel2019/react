@@ -1,5 +1,7 @@
 package com.example.model
 
+import com.example.firebase.AccessControlEntry
+
 enum class VideoAspectPreset(val label: String) {
     FILL("Preencher"),
     FIT("Ajustar"),
@@ -79,7 +81,8 @@ enum class ActiveSheet {
     TAKES_HISTORY,
     VIDEO_URL_DIALOG,
     EXPORT_SHARE,
-    SUBSCRIPTION
+    SUBSCRIPTION,
+    ADMIN_ACCESS_PANEL
 }
 
 sealed class ExportStatus {
@@ -91,14 +94,24 @@ sealed class ExportStatus {
 
 enum class SubscriptionAccessState {
     CHECKING,
+    ADMIN_OWNER,
+    COMPLIMENTARY_PRO,
     TRIAL_ACTIVE,
     PRO_SUBSCRIBED,
     PENDING_PAYMENT,
-    TRIAL_EXPIRED
+    TRIAL_EXPIRED,
+    BLOCKED_BY_ADMIN
 }
 
 data class SubscriptionUiState(
     val accessState: SubscriptionAccessState = SubscriptionAccessState.CHECKING,
+    val userEmail: String = "",
+    val isAdminOwner: Boolean = false,
+    val blockReason: String? = null,
+    val adminEntries: List<AccessControlEntry> = emptyList(),
+    val isAdminLoading: Boolean = false,
+    val isAdminMutating: Boolean = false,
+    val adminErrorMessage: String? = null,
     val trialRemainingMs: Long = 4L * 24L * 60L * 60L * 1000L,
     val trialEndsAtMs: Long = 0L,
     val isClockTampered: Boolean = false,
@@ -109,17 +122,22 @@ data class SubscriptionUiState(
     val billingMessage: String? = null
 ) {
     val isPro: Boolean
-        get() = accessState == SubscriptionAccessState.PRO_SUBSCRIBED
+        get() = accessState == SubscriptionAccessState.PRO_SUBSCRIBED ||
+            accessState == SubscriptionAccessState.ADMIN_OWNER ||
+            accessState == SubscriptionAccessState.COMPLIMENTARY_PRO
 
     val isLocked: Boolean
         get() = accessState == SubscriptionAccessState.TRIAL_EXPIRED ||
-            accessState == SubscriptionAccessState.PENDING_PAYMENT
+            accessState == SubscriptionAccessState.PENDING_PAYMENT ||
+            accessState == SubscriptionAccessState.BLOCKED_BY_ADMIN
 
     val remainingDaysRoundedUp: Int
         get() = ((trialRemainingMs + 86_399_999L) / 86_400_000L).toInt().coerceIn(0, 4)
 
     val badgeLabel: String
         get() = when (accessState) {
+            SubscriptionAccessState.ADMIN_OWNER -> "ADMIN"
+            SubscriptionAccessState.COMPLIMENTARY_PRO -> "VIP"
             SubscriptionAccessState.PRO_SUBSCRIBED -> "PRO"
             SubscriptionAccessState.TRIAL_ACTIVE -> {
                 val totalHours = (trialRemainingMs / 3_600_000L).coerceAtLeast(1L)
@@ -129,6 +147,7 @@ data class SubscriptionUiState(
             }
             SubscriptionAccessState.PENDING_PAYMENT -> "PENDENTE"
             SubscriptionAccessState.TRIAL_EXPIRED -> "ASSINAR"
+            SubscriptionAccessState.BLOCKED_BY_ADMIN -> "BLOQUEADO"
             SubscriptionAccessState.CHECKING -> "PRO"
         }
 }

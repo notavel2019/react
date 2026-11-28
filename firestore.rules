@@ -1,0 +1,102 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // =========================================================================
+    // DEFAULT DENY CATCH-ALL (ZERO TRUST)
+    // =========================================================================
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // =========================================================================
+    // AUTHENTICATION & AUTHORIZATION HELPERS
+    // =========================================================================
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerifiedEmail() {
+      return isSignedIn() &&
+        request.auth.token.email_verified == true &&
+        request.auth.token.email is string;
+    }
+
+    function isOwnerAdmin() {
+      return isVerifiedEmail() &&
+        request.auth.token.email.lower() == 'lojadolar@gmail.com';
+    }
+
+    function isValidId(id) {
+      return id is string &&
+        id.size() >= 1 &&
+        id.size() <= 128 &&
+        id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    // =========================================================================
+    // DOMAIN VALIDATION HELPERS
+    // =========================================================================
+    function isValidEmailLower(email) {
+      return email is string &&
+        email.size() >= 5 &&
+        email.size() <= 120 &&
+        email.matches('^[a-z0-9._%+\\-]+@[a-z0-9.\\-]+\\.[a-z]{2,}$');
+    }
+
+    function isValidAccessControlCreate(data) {
+      return data.keys().hasAll(['emailLower', 'status', 'note', 'updatedByUid', 'createdAt', 'updatedAt']) &&
+        data.keys().hasOnly(['emailLower', 'status', 'note', 'updatedByUid', 'createdAt', 'updatedAt']) &&
+        isValidEmailLower(data.emailLower) &&
+        data.status in ['ALLOWED', 'BLOCKED'] &&
+        data.note is string && data.note.size() <= 140 &&
+        data.updatedByUid == request.auth.uid &&
+        data.createdAt is timestamp && data.createdAt <= request.time &&
+        data.updatedAt is timestamp && data.updatedAt <= request.time;
+    }
+
+    function isValidAccessControlUpdate(newData, oldData) {
+      return newData.keys().hasAll(['emailLower', 'status', 'note', 'updatedByUid', 'createdAt', 'updatedAt']) &&
+        newData.keys().hasOnly(['emailLower', 'status', 'note', 'updatedByUid', 'createdAt', 'updatedAt']) &&
+        newData.emailLower == oldData.emailLower &&
+        newData.createdAt == oldData.createdAt &&
+        newData.diff(oldData).affectedKeys().hasOnly(['status', 'note', 'updatedByUid', 'updatedAt']) &&
+        newData.status in ['ALLOWED', 'BLOCKED'] &&
+        newData.note is string && newData.note.size() <= 140 &&
+        newData.updatedByUid == request.auth.uid &&
+        newData.updatedAt is timestamp && newData.updatedAt <= request.time;
+    }
+
+    // =========================================================================
+    // ACCESS CONTROLS COLLECTION (/access_controls/{entryId})
+    // =========================================================================
+    match /access_controls/{entryId} {
+      // Owner admin can inspect all access records.
+      // Any other signed-in user with a verified Google email can ONLY read/query
+      // their own exact record via whereEqualTo("emailLower", authEmailLower).
+      allow get: if isOwnerAdmin() ||
+        (isVerifiedEmail() && resource != null && existing().emailLower == request.auth.token.email.lower());
+
+      allow list: if isOwnerAdmin() ||
+        (isVerifiedEmail() && existing().emailLower == request.auth.token.email.lower());
+
+      allow create: if isOwnerAdmin() &&
+        isValidId(entryId) &&
+        isValidAccessControlCreate(incoming());
+
+      allow update: if isOwnerAdmin() &&
+        isValidId(entryId) &&
+        isValidAccessControlUpdate(incoming(), existing());
+
+      allow delete: if isOwnerAdmin() &&
+        isValidId(entryId);
+    }
+  }
+}

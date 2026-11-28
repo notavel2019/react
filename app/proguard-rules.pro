@@ -18,3 +18,7 @@
 # ML Kit Selfie Segmentation (on-device person cutout)
 -keep class com.google.mlkit.** { *; }
 -dontwarn com.google.mlkit.**
+
+# Firebase Firestore data models
+-keep class com.example.firebase.** { *; }
+

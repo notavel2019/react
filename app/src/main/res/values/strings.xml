@@ -126,4 +126,30 @@
     <string name="takes_markers_label">Momentos de reação marcados</string>
     <string name="takes_share">Compartilhar</string>
     <string name="takes_open">Assistir</string>
+
+    <!-- Google Sign-In & Remote Access Control -->
+    <string name="auth_welcome_title">React Studio</string>
+    <string name="auth_welcome_subtitle">Entre com sua conta Google para sincronizar sua assinatura, período de teste e permissões de acesso no estúdio.</string>
+    <string name="auth_google_cta">Entrar com Google</string>
+    <string name="auth_signing_in">Conectando à sua conta Google...</string>
+    <string name="auth_privacy_note">Seus vídeos e gravações continuam 100% locais no seu celular. A conta Google é usada apenas para autenticação e controle de acesso.</string>
+    <string name="auth_sign_out">Trocar conta / Sair</string>
+    <string name="sub_admin_owner_title">Conta Administradora (Acesso Total)</string>
+    <string name="sub_admin_owner_desc">Acesso permanente liberado sem trava de assinatura para o proprietário do aplicativo.</string>
+    <string name="sub_admin_manage_access_cta">Administrar Acessos (Liberar / Bloquear)</string>
+    <string name="sub_vip_title">Acesso Cortesia Liberado</string>
+    <string name="sub_vip_desc">Sua conta possui acesso completo de cortesia/testador autorizado pelo administrador do React Studio.</string>
+    <string name="sub_blocked_title">Acesso suspenso</string>
+    <string name="sub_blocked_default_desc">O acesso desta conta foi suspenso pelo administrador do React Studio.</string>
+    <string name="admin_panel_title">Controle de Acessos</string>
+    <string name="admin_panel_subtitle">Libere testadores/cortesia ou bloqueie contas em tempo real</string>
+    <string name="admin_email_label">E-mail Google do usuário</string>
+    <string name="admin_email_hint">exemplo@gmail.com</string>
+    <string name="admin_note_label">Observação / motivo (opcional)</string>
+    <string name="admin_note_hint">Ex.: Testador beta, celular secundário...</string>
+    <string name="admin_grant_cta">Liberar acesso</string>
+    <string name="admin_block_cta">Bloquear acesso</string>
+    <string name="admin_play_policy_note">Política Google Play: use a liberação apenas para seu uso pessoal, equipe ou testadores de cortesia (nunca cobre assinaturas fora da Google Play).</string>
+    <string name="admin_empty_rules">Nenhuma conta gerenciada ainda. Adicione um e-mail acima para liberar ou bloquear instantaneamente.</string>
+    <string name="cd_remove_rule">Remover regra de acesso</string>
 </resources>

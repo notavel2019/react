@@ -64,7 +64,6 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
 import androidx.media3.common.VideoSize
@@ -76,6 +75,7 @@ import com.example.model.AudioPanelTab
 import com.example.model.ReactLayoutMode
 import com.example.model.StudioUiState
 import com.example.model.VideoSourceType
+import com.example.ui.components.AdminAccessModalSheet
 import com.example.ui.components.AudioConsoleContent
 import com.example.ui.components.AudioConsoleModalSheet
 import com.example.ui.components.BottomCameraStage
@@ -107,7 +107,8 @@ import kotlinx.coroutines.delay
 @OptIn(UnstableApi::class)
 @Composable
 fun ReactStudioScreen(
-    viewModel: ReactStudioViewModel = viewModel()
+    viewModel: ReactStudioViewModel,
+    onSignOut: () -> Unit
 ) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -707,6 +708,25 @@ fun ReactStudioScreen(
                 },
                 onRestoreClick = viewModel::restoreSubscriptionPurchases,
                 onManageSubscriptionClick = { viewModel.openSubscriptionManagement(context) },
+                onOpenAdminPanelClick = {
+                    if (uiState.subscription.isAdminOwner) {
+                        viewModel.openSheet(ActiveSheet.ADMIN_ACCESS_PANEL)
+                    }
+                },
+                onSignOutClick = {
+                    viewModel.closeSheet()
+                    onSignOut()
+                },
+                onDismiss = viewModel::closeSheet
+            )
+        }
+
+        if (uiState.activeSheet == ActiveSheet.ADMIN_ACCESS_PANEL && uiState.subscription.isAdminOwner) {
+            AdminAccessModalSheet(
+                subscription = uiState.subscription,
+                onGrantOrBlock = viewModel::grantOrBlockEmail,
+                onRemoveRule = viewModel::removeAccessRule,
+                onClearError = viewModel::clearAdminError,
                 onDismiss = viewModel::closeSheet
             )
         }
@@ -719,7 +739,7 @@ fun ReactStudioScreen(
             )
         }
 
-        // Full-screen paywall once the 4-day total trial expires without an active Google Play subscription
+        // Full-screen overlay for expired trial, pending Play payment, or admin account suspension
         if (uiState.subscription.isLocked) {
             SubscriptionPaywallOverlay(
                 subscription = uiState.subscription,
@@ -732,7 +752,8 @@ fun ReactStudioScreen(
                     }
                 },
                 onRestoreClick = viewModel::restoreSubscriptionPurchases,
-                onManageSubscriptionClick = { viewModel.openSubscriptionManagement(context) }
+                onManageSubscriptionClick = { viewModel.openSubscriptionManagement(context) },
+                onSignOutClick = onSignOut
             )
         }
     }

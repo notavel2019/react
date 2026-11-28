@@ -8,7 +8,10 @@ import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.provider.MediaStore
 import android.provider.OpenableColumns
+import android.util.Log
 import androidx.lifecycle.AndroidViewModel
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.example.audio.StudioAudioEngine
 import com.example.billing.PlayBillingManager
@@ -16,6 +19,11 @@ import com.example.billing.PlayBillingSnapshot
 import com.example.billing.TrialEntitlementManager
 import com.example.billing.TrialSnapshot
 import com.example.data.AudioPreferencesRepository
+import com.example.firebase.AccessControlEntry
+import com.example.firebase.AccessControlRepository
+import com.example.firebase.AccessOverrideStatus
+import com.example.firebase.isOwnerAdminEmail
+import com.example.firebase.normalizeEmail
 import com.example.media.InstagramLinkResolver
 import com.example.media.SplitScreenVideoExporter
 import com.example.model.ActiveSheet
@@ -35,8 +43,10 @@ import com.example.model.SubscriptionAccessState
 import com.example.model.SubscriptionUiState
 import com.example.model.VideoAspectPreset
 import com.example.model.VideoSourceType
+import com.google.firebase.firestore.FirebaseFirestoreException
 import kotlin.math.abs
 import kotlin.math.log10
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -59,7 +69,15 @@ sealed class PlayerCommand {
     data class SetSpeed(val speed: Float) : PlayerCommand()
 }
 
-class ReactStudioViewModel(application: Application) : AndroidViewModel(application) {
+class ReactStudioViewModel(
+    application: Application,
+    private val userId: String,
+    userEmail: String,
+    private val accessControlRepo: AccessControlRepository
+) : AndroidViewModel(application) {
+
+    private val normalizedUserEmail: String = normalizeEmail(userEmail)
+    private val isAdminOwner: Boolean = isOwnerAdminEmail(normalizedUserEmail)
 
     private val prefsRepo = AudioPreferencesRepository(application)
     private val splitExporter = SplitScreenVideoExporter(application)
@@ -84,6 +102,7 @@ class ReactStudioViewModel(application: Application) : AndroidViewModel(applicat
     private var exportJob: Job? = null
     private var trialTickerJob: Job? = null
     private var latestTrialSnapshot: TrialSnapshot? = null
+    private var latestMyAccessControl: AccessControlEntry? = null
     private var lastAutoMarkerAtMs = 0L
     private var wasPlayingBeforeAutoPause = false
     private var lastSpeakingState = false
@@ -101,9 +120,23 @@ class ReactStudioViewModel(application: Application) : AndroidViewModel(applicat
     private var recordingSpeakingState = false
 
     init {
+        _uiState.update { state ->
+            state.copy(
+                subscription = state.subscription.copy(
+                    userEmail = normalizedUserEmail,
+                    isAdminOwner = isAdminOwner,
+                    accessState = if (isAdminOwner) {
+                        SubscriptionAccessState.ADMIN_OWNER
+                    } else {
+                        SubscriptionAccessState.CHECKING
+                    }
+                )
+            )
+        }
         loadInitialPreferences()
         observeAudioTelemetry()
         observeBillingAndTrial()
+        observeRemoteAccessControl()
         refreshRecordedTakes()
     }
 
@@ -119,6 +152,69 @@ class ReactStudioViewModel(application: Application) : AndroidViewModel(applicat
                     splitRatio = savedSplit,
                     layoutMode = savedLayout
                 )
+            }
+        }
+    }
+
+    private fun observeRemoteAccessControl() {
+        if (!isAdminOwner && normalizedUserEmail.isNotBlank()) {
+            viewModelScope.launch {
+                try {
+                    accessControlRepo.observeMyAccessControl(normalizedUserEmail).collect { entry ->
+                        latestMyAccessControl = entry
+                        recomputeSubscriptionUi(billingManager.snapshot.value, latestTrialSnapshot)
+                    }
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    val ffe = e as? FirebaseFirestoreException ?: e.cause as? FirebaseFirestoreException
+                    Log.w("ReactStudioVM", "Remote access listener unavailable (${ffe?.code})", e)
+                }
+            }
+        }
+
+        if (isAdminOwner) {
+            viewModelScope.launch {
+                _uiState.update {
+                    it.copy(
+                        subscription = it.subscription.copy(
+                            isAdminLoading = true,
+                            adminErrorMessage = null
+                        )
+                    )
+                }
+                try {
+                    accessControlRepo.observeAllAccessControls().collect { entries ->
+                        _uiState.update {
+                            it.copy(
+                                subscription = it.subscription.copy(
+                                    adminEntries = entries,
+                                    isAdminLoading = false,
+                                    adminErrorMessage = null
+                                )
+                            )
+                        }
+                    }
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    val ffe = e as? FirebaseFirestoreException ?: e.cause as? FirebaseFirestoreException
+                    val message = when (ffe?.code) {
+                        FirebaseFirestoreException.Code.PERMISSION_DENIED ->
+                            "Permissão negada ao carregar regras. Verifique se está logado com lojadolar@gmail.com."
+                        FirebaseFirestoreException.Code.UNAVAILABLE ->
+                            "Sem conexão com o servidor de acessos no momento."
+                        else -> "Erro ao sincronizar controle de acessos."
+                    }
+                    _uiState.update {
+                        it.copy(
+                            subscription = it.subscription.copy(
+                                isAdminLoading = false,
+                                adminErrorMessage = message
+                            )
+                        )
+                    }
+                }
             }
         }
     }
@@ -148,17 +244,29 @@ class ReactStudioViewModel(application: Application) : AndroidViewModel(applicat
         billing: PlayBillingSnapshot,
         trial: TrialSnapshot?
     ) {
+        val remoteStatus = latestMyAccessControl?.parsedStatus
         val accessState = when {
+            isAdminOwner -> SubscriptionAccessState.ADMIN_OWNER
+            remoteStatus == AccessOverrideStatus.BLOCKED -> SubscriptionAccessState.BLOCKED_BY_ADMIN
+            remoteStatus == AccessOverrideStatus.ALLOWED -> SubscriptionAccessState.COMPLIMENTARY_PRO
             billing.isSubscribed -> SubscriptionAccessState.PRO_SUBSCRIBED
             billing.isPendingPayment -> SubscriptionAccessState.PENDING_PAYMENT
             trial == null -> SubscriptionAccessState.CHECKING
             trial.isTrialActive -> SubscriptionAccessState.TRIAL_ACTIVE
             else -> SubscriptionAccessState.TRIAL_EXPIRED
         }
+        val blockReason = if (accessState == SubscriptionAccessState.BLOCKED_BY_ADMIN) {
+            latestMyAccessControl?.note?.takeIf { it.isNotBlank() }
+        } else {
+            null
+        }
         _uiState.update { state ->
             state.copy(
-                subscription = SubscriptionUiState(
+                subscription = state.subscription.copy(
                     accessState = accessState,
+                    userEmail = normalizedUserEmail,
+                    isAdminOwner = isAdminOwner,
+                    blockReason = blockReason,
                     trialRemainingMs = trial?.remainingMs ?: state.subscription.trialRemainingMs,
                     trialEndsAtMs = trial?.trialEndsAtMs ?: state.subscription.trialEndsAtMs,
                     isClockTampered = trial?.isClockTampered ?: false,
@@ -960,6 +1068,107 @@ class ReactStudioViewModel(application: Application) : AndroidViewModel(applicat
         billingManager.openSubscriptionManagement(targetContext)
     }
 
+    // --- Owner Admin Remote Access Control (Complimentary Testers & Moderation) ---
+
+    fun grantOrBlockEmail(
+        rawEmail: String,
+        status: AccessOverrideStatus,
+        note: String
+    ) {
+        if (!isAdminOwner) return
+        viewModelScope.launch {
+            _uiState.update {
+                it.copy(
+                    subscription = it.subscription.copy(
+                        isAdminMutating = true,
+                        adminErrorMessage = null
+                    )
+                )
+            }
+            val result = accessControlRepo.upsertAccessControl(rawEmail, status, note)
+            result.fold(
+                onSuccess = { normalized ->
+                    val toast = if (status == AccessOverrideStatus.ALLOWED) {
+                        "Acesso cortesia liberado para $normalized"
+                    } else {
+                        "Acesso bloqueado para $normalized"
+                    }
+                    _uiState.update {
+                        it.copy(
+                            subscription = it.subscription.copy(
+                                isAdminMutating = false,
+                                adminErrorMessage = null
+                            ),
+                            statusToast = toast
+                        )
+                    }
+                },
+                onFailure = { err ->
+                    val ffe = err as? FirebaseFirestoreException ?: err.cause as? FirebaseFirestoreException
+                    val friendly = when (ffe?.code) {
+                        FirebaseFirestoreException.Code.PERMISSION_DENIED ->
+                            "Permissão negada no servidor. Confirme o login com lojadolar@gmail.com."
+                        FirebaseFirestoreException.Code.UNAVAILABLE ->
+                            "Sem internet para salvar a regra agora."
+                        else -> err.message ?: "Não foi possível salvar a regra de acesso."
+                    }
+                    _uiState.update {
+                        it.copy(
+                            subscription = it.subscription.copy(
+                                isAdminMutating = false,
+                                adminErrorMessage = friendly
+                            )
+                        )
+                    }
+                }
+            )
+        }
+    }
+
+    fun removeAccessRule(entryId: String) {
+        if (!isAdminOwner) return
+        viewModelScope.launch {
+            _uiState.update {
+                it.copy(
+                    subscription = it.subscription.copy(
+                        isAdminMutating = true,
+                        adminErrorMessage = null
+                    )
+                )
+            }
+            val result = accessControlRepo.deleteAccessControl(entryId)
+            result.fold(
+                onSuccess = {
+                    _uiState.update {
+                        it.copy(
+                            subscription = it.subscription.copy(
+                                isAdminMutating = false,
+                                adminErrorMessage = null
+                            ),
+                            statusToast = "Regra removida · Conta voltou ao fluxo padrão da Google Play"
+                        )
+                    }
+                },
+                onFailure = { err ->
+                    _uiState.update {
+                        it.copy(
+                            subscription = it.subscription.copy(
+                                isAdminMutating = false,
+                                adminErrorMessage = err.message ?: "Erro ao remover regra."
+                            )
+                        )
+                    }
+                }
+            )
+        }
+    }
+
+    fun clearAdminError() {
+        _uiState.update {
+            it.copy(subscription = it.subscription.copy(adminErrorMessage = null))
+        }
+    }
+
     // --- Audio Settings ---
 
     fun updateAudioSettings(transform: (AudioSettingsState) -> AudioSettingsState) {
@@ -1048,5 +1257,25 @@ class ReactStudioViewModel(application: Application) : AndroidViewModel(applicat
         trialTickerJob?.cancel()
         billingManager.release()
         audioEngine.release()
+    }
+
+    class Factory(
+        private val application: Application,
+        private val userId: String,
+        private val userEmail: String,
+        private val accessControlRepo: AccessControlRepository
+    ) : ViewModelProvider.Factory {
+        @Suppress("UNCHECKED_CAST")
+        override fun <T : ViewModel> create(modelClass: Class<T>): T {
+            if (modelClass.isAssignableFrom(ReactStudioViewModel::class.java)) {
+                return ReactStudioViewModel(
+                    application = application,
+                    userId = userId,
+                    userEmail = userEmail,
+                    accessControlRepo = accessControlRepo
+                ) as T
+            }
+            throw IllegalArgumentException("Unknown ViewModel class: ${modelClass.name}")
+        }
     }
 }

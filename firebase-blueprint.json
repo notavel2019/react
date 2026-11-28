@@ -1,0 +1,47 @@
+{
+  "entities": {
+    "AccessControlEntry": {
+      "title": "AccessControlEntry",
+      "description": "Remote complimentary tester/owner access grant or account suspension record managed exclusively by the app owner.",
+      "type": "object",
+      "properties": {
+        "emailLower": {
+          "type": "string",
+          "description": "Normalized lowercase Google account email address (immutable after creation)."
+        },
+        "status": {
+          "type": "string",
+          "enum": ["ALLOWED", "BLOCKED"],
+          "description": "ALLOWED grants complimentary tester/owner Pro access; BLOCKED immediately suspends app access."
+        },
+        "note": {
+          "type": "string",
+          "description": "Optional owner note or reason shown when relevant (max 140 chars)."
+        },
+        "updatedByUid": {
+          "type": "string",
+          "description": "Firebase Auth UID of the owner admin who created or last updated this record."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when the record was created (immutable)."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when the record was last updated."
+        }
+      },
+      "required": ["emailLower", "status", "note", "updatedByUid", "createdAt", "updatedAt"]
+    }
+  },
+  "firestore": {
+    "/access_controls/{entryId}": {
+      "schema": {
+        "$ref": "#/entities/AccessControlEntry"
+      },
+      "description": "Access control overrides keyed by deterministic SHA-256 hex digest of normalized lowercase email."
+    }
+  }
+}

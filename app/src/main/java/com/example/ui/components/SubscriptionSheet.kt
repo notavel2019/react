@@ -23,7 +23,11 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.Logout
+import androidx.compose.material.icons.rounded.AccountCircle
+import androidx.compose.material.icons.rounded.AdminPanelSettings
 import androidx.compose.material.icons.rounded.AutoAwesome
+import androidx.compose.material.icons.rounded.Block
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.GppGood
@@ -87,6 +91,8 @@ fun SubscriptionModalSheet(
     onSubscribeClick: () -> Unit,
     onRestoreClick: () -> Unit,
     onManageSubscriptionClick: () -> Unit,
+    onOpenAdminPanelClick: () -> Unit,
+    onSignOutClick: () -> Unit,
     onDismiss: () -> Unit
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
@@ -174,6 +180,8 @@ fun SubscriptionModalSheet(
                 onSubscribeClick = onSubscribeClick,
                 onRestoreClick = onRestoreClick,
                 onManageSubscriptionClick = onManageSubscriptionClick,
+                onOpenAdminPanelClick = onOpenAdminPanelClick,
+                onSignOutClick = onSignOutClick,
                 onOpenLegal = { showLegalDialog = true }
             )
         }
@@ -192,9 +200,11 @@ fun SubscriptionPaywallOverlay(
     subscription: SubscriptionUiState,
     onSubscribeClick: () -> Unit,
     onRestoreClick: () -> Unit,
-    onManageSubscriptionClick: () -> Unit
+    onManageSubscriptionClick: () -> Unit,
+    onSignOutClick: () -> Unit
 ) {
     var showLegalDialog by remember { mutableStateOf(false) }
+    val isBlockedByAdmin = subscription.accessState == SubscriptionAccessState.BLOCKED_BY_ADMIN
 
     Box(
         modifier = Modifier
@@ -226,10 +236,10 @@ fun SubscriptionPaywallOverlay(
                 contentAlignment = Alignment.Center
             ) {
                 Icon(
-                    imageVector = if (subscription.accessState == SubscriptionAccessState.PENDING_PAYMENT) {
-                        Icons.Rounded.HourglassTop
-                    } else {
-                        Icons.Rounded.Lock
+                    imageVector = when (subscription.accessState) {
+                        SubscriptionAccessState.BLOCKED_BY_ADMIN -> Icons.Rounded.Block
+                        SubscriptionAccessState.PENDING_PAYMENT -> Icons.Rounded.HourglassTop
+                        else -> Icons.Rounded.Lock
                     },
                     contentDescription = null,
                     tint = CoralCrimson,
@@ -238,10 +248,10 @@ fun SubscriptionPaywallOverlay(
             }
 
             Text(
-                text = if (subscription.accessState == SubscriptionAccessState.PENDING_PAYMENT) {
-                    stringResource(R.string.sub_pending_title)
-                } else {
-                    stringResource(R.string.sub_expired_title)
+                text = when (subscription.accessState) {
+                    SubscriptionAccessState.BLOCKED_BY_ADMIN -> stringResource(R.string.sub_blocked_title)
+                    SubscriptionAccessState.PENDING_PAYMENT -> stringResource(R.string.sub_pending_title)
+                    else -> stringResource(R.string.sub_expired_title)
                 },
                 style = MaterialTheme.typography.headlineSmall,
                 color = MaterialTheme.colorScheme.onSurface,
@@ -249,26 +259,38 @@ fun SubscriptionPaywallOverlay(
             )
 
             Text(
-                text = if (subscription.isClockTampered) {
-                    stringResource(R.string.sub_clock_tampered_desc)
-                } else if (subscription.accessState == SubscriptionAccessState.PENDING_PAYMENT) {
-                    stringResource(R.string.sub_pending_desc)
-                } else {
-                    stringResource(R.string.sub_expired_subtitle)
+                text = when {
+                    isBlockedByAdmin -> subscription.blockReason
+                        ?: stringResource(R.string.sub_blocked_default_desc)
+                    subscription.isClockTampered -> stringResource(R.string.sub_clock_tampered_desc)
+                    subscription.accessState == SubscriptionAccessState.PENDING_PAYMENT ->
+                        stringResource(R.string.sub_pending_desc)
+                    else -> stringResource(R.string.sub_expired_subtitle)
                 },
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 textAlign = TextAlign.Center
             )
 
-            SubscriptionContentBody(
-                subscription = subscription,
-                isBlockingPaywall = true,
-                onSubscribeClick = onSubscribeClick,
-                onRestoreClick = onRestoreClick,
-                onManageSubscriptionClick = onManageSubscriptionClick,
-                onOpenLegal = { showLegalDialog = true }
-            )
+            if (isBlockedByAdmin) {
+                if (subscription.userEmail.isNotBlank()) {
+                    SignedInAccountBar(
+                        email = subscription.userEmail,
+                        onSignOutClick = onSignOutClick
+                    )
+                }
+            } else {
+                SubscriptionContentBody(
+                    subscription = subscription,
+                    isBlockingPaywall = true,
+                    onSubscribeClick = onSubscribeClick,
+                    onRestoreClick = onRestoreClick,
+                    onManageSubscriptionClick = onManageSubscriptionClick,
+                    onOpenAdminPanelClick = {},
+                    onSignOutClick = onSignOutClick,
+                    onOpenLegal = { showLegalDialog = true }
+                )
+            }
         }
     }
 
@@ -287,10 +309,109 @@ private fun SubscriptionContentBody(
     onSubscribeClick: () -> Unit,
     onRestoreClick: () -> Unit,
     onManageSubscriptionClick: () -> Unit,
+    onOpenAdminPanelClick: () -> Unit,
+    onSignOutClick: () -> Unit,
     onOpenLegal: () -> Unit
 ) {
+    if (subscription.userEmail.isNotBlank()) {
+        SignedInAccountBar(
+            email = subscription.userEmail,
+            onSignOutClick = onSignOutClick
+        )
+    }
+
     // 1. Current Access Status Banner
     when (subscription.accessState) {
+        SubscriptionAccessState.ADMIN_OWNER -> {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(18.dp))
+                    .background(ElectricCyan.copy(alpha = 0.14f))
+                    .border(1.dp, ElectricCyan.copy(alpha = 0.65f), RoundedCornerShape(18.dp))
+                    .padding(14.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.AdminPanelSettings,
+                        contentDescription = null,
+                        tint = ElectricCyan,
+                        modifier = Modifier.size(28.dp)
+                    )
+                    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                        Text(
+                            text = stringResource(R.string.sub_admin_owner_title),
+                            style = MaterialTheme.typography.titleMedium,
+                            color = ElectricCyan
+                        )
+                        Text(
+                            text = stringResource(R.string.sub_admin_owner_desc),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                    }
+                }
+                Button(
+                    onClick = onOpenAdminPanelClick,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = ElectricCyan,
+                        contentColor = StudioVoid
+                    ),
+                    shape = RoundedCornerShape(14.dp),
+                    contentPadding = PaddingValues(vertical = 12.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(48.dp)
+                        .testTag("open_admin_access_panel_button")
+                ) {
+                    Icon(
+                        imageVector = Icons.Rounded.AdminPanelSettings,
+                        contentDescription = null,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(
+                        text = stringResource(R.string.sub_admin_manage_access_cta),
+                        style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold)
+                    )
+                }
+            }
+        }
+        SubscriptionAccessState.COMPLIMENTARY_PRO -> {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(18.dp))
+                    .background(ElectricCyan.copy(alpha = 0.14f))
+                    .border(1.dp, ElectricCyan.copy(alpha = 0.6f), RoundedCornerShape(18.dp))
+                    .padding(14.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Rounded.Verified,
+                    contentDescription = null,
+                    tint = ElectricCyan,
+                    modifier = Modifier.size(28.dp)
+                )
+                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Text(
+                        text = stringResource(R.string.sub_vip_title),
+                        style = MaterialTheme.typography.titleMedium,
+                        color = ElectricCyan
+                    )
+                    Text(
+                        text = stringResource(R.string.sub_vip_desc),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                }
+            }
+        }
         SubscriptionAccessState.PRO_SUBSCRIBED -> {
             Row(
                 modifier = Modifier
@@ -688,17 +809,81 @@ private fun PrivacyAndTermsDialog(
 }
 
 @Composable
+private fun SignedInAccountBar(
+    email: String,
+    onSignOutClick: () -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(14.dp))
+            .background(StudioSurfaceElevated)
+            .border(1.dp, StudioOutlineSubtle, RoundedCornerShape(14.dp))
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            modifier = Modifier.weight(1f)
+        ) {
+            Icon(
+                imageVector = Icons.Rounded.AccountCircle,
+                contentDescription = null,
+                tint = ElectricCyan,
+                modifier = Modifier.size(20.dp)
+            )
+            Text(
+                text = email,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurface,
+                maxLines = 1
+            )
+        }
+        TextButton(
+            onClick = onSignOutClick,
+            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
+            modifier = Modifier.testTag("sign_out_button")
+        ) {
+            Icon(
+                imageVector = Icons.AutoMirrored.Rounded.Logout,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.size(15.dp)
+            )
+            Spacer(modifier = Modifier.width(4.dp))
+            Text(
+                text = "Sair",
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+    }
+}
+
+@Composable
 fun SubscriptionStatusChip(
     subscription: SubscriptionUiState,
     onClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val accent = when (subscription.accessState) {
+        SubscriptionAccessState.ADMIN_OWNER,
+        SubscriptionAccessState.COMPLIMENTARY_PRO,
         SubscriptionAccessState.PRO_SUBSCRIBED -> ElectricCyan
         SubscriptionAccessState.TRIAL_ACTIVE -> SignalAmber
         SubscriptionAccessState.TRIAL_EXPIRED,
-        SubscriptionAccessState.PENDING_PAYMENT -> CoralCrimson
+        SubscriptionAccessState.PENDING_PAYMENT,
+        SubscriptionAccessState.BLOCKED_BY_ADMIN -> CoralCrimson
         SubscriptionAccessState.CHECKING -> ElectricCyan
+    }
+    val icon = when (subscription.accessState) {
+        SubscriptionAccessState.ADMIN_OWNER -> Icons.Rounded.AdminPanelSettings
+        SubscriptionAccessState.COMPLIMENTARY_PRO,
+        SubscriptionAccessState.PRO_SUBSCRIBED -> Icons.Rounded.Verified
+        SubscriptionAccessState.BLOCKED_BY_ADMIN -> Icons.Rounded.Block
+        else -> Icons.Rounded.AutoAwesome
     }
     Surface(
         onClick = onClick,
@@ -714,7 +899,7 @@ fun SubscriptionStatusChip(
             horizontalArrangement = Arrangement.spacedBy(4.dp)
         ) {
             Icon(
-                imageVector = if (subscription.isPro) Icons.Rounded.Verified else Icons.Rounded.AutoAwesome,
+                imageVector = icon,
                 contentDescription = stringResource(R.string.cd_subscription_plan),
                 tint = accent,
                 modifier = Modifier.size(14.dp)
